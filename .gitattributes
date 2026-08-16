@@ -1,0 +1,4 @@
+# Byte-for-byte. The vendored engine is regenerated and patched by
+# tools/vendor-mochadoom.sh, and a rewritten line ending turns a fifteen line
+# patch into a four thousand line one. See CLAUDE.md.
+* -text

@@ -1,0 +1,19 @@
+.gradle/
+build/
+run/
+# Second dev client, for two-player testing. See CLAUDE.md.
+run2/
+eclipse/
+.idea/
+*.iml
+*.ipr
+*.iws
+.classpath
+.project
+.settings/
+# Never commit WADs: DOOM.WAD / DOOM2.WAD are proprietary.
+*.wad
+*.WAD
+# Freedoom is the exception. It is BSD licensed and meant to be redistributed,
+# and it is what makes the mod work out of the box. See third-party/freedoom/.
+!src/main/resources/assets/dbrdoom/wads/*.wad

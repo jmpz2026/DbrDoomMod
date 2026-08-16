@@ -1,0 +1,130 @@
+buildscript {
+    repositories {
+        maven { url = "https://maven.minecraftforge.net/" }
+        maven { url = "https://maven.aliyun.com/repository/public" }
+        maven { url = "https://jitpack.io" }
+        maven { url = "https://oss.sonatype.org/content/repositories/snapshots/" }
+        mavenCentral()
+    }
+    dependencies {
+        classpath('com.anatawa12.forge:ForgeGradle:1.2-1.1.+') { changing = true }
+        classpath 'org.ow2.asm:asm-all:5.2'
+    }
+}
+
+apply plugin: 'forge'
+
+version = project.modVersion
+group = project.modGroup
+archivesBaseName = project.modId
+
+sourceCompatibility = JavaVersion.VERSION_1_8
+targetCompatibility = JavaVersion.VERSION_1_8
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-proc:none']
+    // The vendored Mocha Doom engine is legacy code and produces a lot of noise.
+    options.compilerArgs += ['-nowarn']
+}
+
+minecraft {
+    version = "${project.minecraftVersion}-${project.forgeVersion}-${project.minecraftVersion}"
+    runDir = "run"
+}
+
+repositories {
+    maven { name = "forge"; url = "https://maven.minecraftforge.net/" }
+    maven { name = "forge-legacy"; url = "https://files.minecraftforge.net/maven/" }
+    mavenCentral()
+}
+
+configurations {
+    /*
+     * Packed into the jar rather than merely compiled against.
+     *
+     * Hooked to implementation, not compile: Gradle 8 no longer feeds the
+     * compile classpath from `compile`, so extending that one resolves the
+     * dependency and then fails to compile against it.
+     */
+    embed
+    implementation.extendsFrom embed
+}
+
+dependencies {
+    /*
+     * The Doom engine is vendored, not a dependency. This is here only to
+     * unpack the bundled game data: Freedoom ships as a 28MB WAD, which zip's
+     * deflate takes to 10.3MB but LZMA2 takes to 7.1MB. Paying 115KB for the
+     * decompressor to save 3MB is worth it when the game data is 90% of the jar.
+     *
+     * XZ for Java is public domain, so it adds no licensing obligations.
+     */
+    embed 'org.tukaani:xz:1.9'
+}
+
+processResources {
+    inputs.property "version", project.version
+    inputs.property "mcversion", project.minecraft.version
+
+    // processResources already picks up sourceSets.main.resources; only the
+    // placeholders in mcmod.info need expanding.
+    filesMatching('mcmod.info') {
+        expand 'version': project.version, 'mcversion': project.minecraft.version
+    }
+}
+
+jar {
+    // GPLv3 requires the license to travel with the binary.
+    from(project.file('LICENSE')) {
+        into 'META-INF'
+    }
+
+    /*
+     * Embedded libraries, minus their META-INF.
+     *
+     * Dropping all of META-INF is what makes this work at all. XZ ships as a
+     * multi-release jar carrying META-INF/versions/9/module-info.class, and the
+     * ASM inside reobf's SpecialSource cannot read a Java 9 class file: it
+     * throws a bare IllegalArgumentException and the build dies with no
+     * explanation. FML's own mod scanner trips over the same entry. The library
+     * classes themselves are ordinary Java 7 and remap harmlessly.
+     */
+    from {
+        configurations.embed.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    exclude 'META-INF/**'
+
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+/*
+ * Fails the build if an embedded library did not make it into the jar.
+ *
+ * This is not paranoia. An earlier version added the libraries with Ant's zip
+ * task in update mode, which only copies sources newer than the archive; the
+ * library is from 2021, so on a clean build it silently added nothing. The jar
+ * looked fine, ran fine as long as the game data was already unpacked, and would
+ * have failed with NoClassDefFoundError on a fresh install.
+ */
+task verifyJar {
+    dependsOn tasks.reobf
+    description = 'Checks that the embedded libraries survived into the jar.'
+
+    doLast {
+        final File target = jar.archiveFile.get().asFile
+        final java.util.zip.ZipFile zip = new java.util.zip.ZipFile(target)
+        try {
+            final String probe = 'org/tukaani/xz/XZInputStream.class'
+            if (zip.getEntry(probe) == null) {
+                throw new GradleException(
+                    "${target.name} is missing ${probe}. The bundled game data cannot be unpacked.")
+            }
+            logger.lifecycle("verifyJar: embedded libraries present in ${target.name}")
+        } finally {
+            zip.close()
+        }
+    }
+}
+
+build.dependsOn verifyJar

@@ -1,0 +1,318 @@
+diff -ruN a/data/dstrings.java b/data/dstrings.java
+--- a/data/dstrings.java	2026-08-16 10:11:22.413697100 -0500
++++ b/data/dstrings.java	2026-08-16 10:11:22.203427300 -0500
+@@ -57,7 +57,13 @@
+ 
+ 
+     // Misc. other strings.
+-    public static final String SAVEGAMENAME=    "doomsav";
++    /**
++     * DbrDoomMod: no longer final. Savegame paths are built as
++     * SAVEGAMENAME + slot + ".dsg" in six places, so setting an absolute prefix
++     * here redirects all of them at once, into config/dbrdoom/saves/.
++     * Dropping final also stops javac inlining it as a compile-time constant.
++     */
++    public static String SAVEGAMENAME=    "doomsav";
+     
+     /** File locations,  relative to current position.
+      * Path names are OS-sensitive. 
+diff -ruN a/doom/ConfigBase.java b/doom/ConfigBase.java
+--- a/doom/ConfigBase.java	2026-08-16 10:11:22.533650500 -0500
++++ b/doom/ConfigBase.java	2026-08-16 10:11:21.851413600 -0500
+@@ -61,6 +61,16 @@
+     public static class Files {
+         private static String folder;
+ 
++        /**
++         * DbrDoomMod: redirects default.cfg / mochadoom.cfg away from the
++         * process working directory, which for Minecraft is the game folder.
++         * Must be called before the first config read. Pass a path that already
++         * ends with a file separator.
++         */
++        public static void setFolder(String baseFolder) {
++            folder = baseFolder;
++        }
++
+         public final Comparator<Settings> comparator;
+         public final String fileName;
+         public boolean changed = true;
+diff -ruN a/doom/DoomMain.java b/doom/DoomMain.java
+--- a/doom/DoomMain.java	2026-08-16 10:11:22.570700200 -0500
++++ b/doom/DoomMain.java	2026-08-16 10:11:21.830782400 -0500
+@@ -398,6 +398,19 @@
+      */
+     @D_Main.C(D_DoomLoop)
+     public void DoomLoop() throws IOException {
++        initLoop();
++
++        while (true) {
++            runOneFrame();
++        }
++    }
++
++    /**
++     * DbrDoomMod: everything DoomLoop() does before entering its infinite loop.
++     * Split out so the host can set the engine up and then drive it one frame at
++     * a time from its own thread instead of blocking forever in here.
++     */
++    public void initLoop() throws IOException {
+         if (demorecording) {
+             G_BeginRecording: {
+                 BeginRecording();
+@@ -421,7 +434,14 @@
+             view = sceneRenderer.getView();
+         }
+         
+-        while (true) {
++    }
++
++    /**
++     * DbrDoomMod: one iteration of the original DoomLoop() while(true) body.
++     * The host calls this once per Doom tic (35 Hz) from its own thread, so the
++     * body is left indented as it was to keep the upstream diff minimal.
++     */
++    public void runOneFrame() throws IOException {
+             // frame syncronous IO operations
+             I_StartFrame:;
+             
+@@ -465,7 +485,6 @@
+             // Update sound output.
+             soundDriver.SubmitSound();
+             //#endif
+-        }
+     }
+     
+     // To keep an "eye" on the renderer.
+@@ -2690,6 +2709,15 @@
+     }
+     
+     public void setupLoop() throws IOException {
++        setupSession();
++        DoomLoop();  // never returns
++    }
++
++    /**
++     * DbrDoomMod: setupLoop() minus the blocking DoomLoop() call, so the host
++     * can prepare a session and then drive it frame by frame.
++     */
++    public void setupSession() throws IOException {
+         // check for a driver that wants intermission stats
+         cVarManager.with(CommandVariable.STATCOPY, 0, (String s) -> {
+             // TODO: this should be chained to a logger
+@@ -2730,8 +2758,6 @@
+                 }
+             }
+         }
+-
+-        DoomLoop();  // never returns
+     }
+ 
+     private void printGameInfo() {
+@@ -3743,6 +3769,19 @@
+ 
+         // wait for new tics if needed
+         while (lowtic < gametic / ticdup + counts) {
++            /**
++             * DbrDoomMod: upstream spins here without sleeping, which is fine
++             * for a dedicated process but pegs a core inside Minecraft and
++             * starves the render thread. A tic is 28.5ms, so a 1ms sleep costs
++             * no timing accuracy.
++             */
++            try {
++                Thread.sleep(1);
++            } catch (InterruptedException ie) {
++                Thread.currentThread().interrupt();
++                return;
++            }
++
+             NetUpdate();
+             lowtic = MAXINT;
+ 
+diff -ruN a/m/Menu.java b/m/Menu.java
+--- a/m/Menu.java	2026-08-16 10:11:22.822648200 -0500
++++ b/m/Menu.java	2026-08-16 10:11:22.122053700 -0500
+@@ -1412,6 +1412,20 @@
+             break;
+         }
+ 
++        /*
++         * DbrDoomMod: an IWAD can carry fewer episodes than its game mode
++         * implies. The mode is decided by the file's name, so a trimmed WAD
++         * still claims every episode, and choosing one whose maps are absent
++         * drops the player into a failed load with no explanation.
++         *
++         * Trim from the top down until the last listed episode is one that
++         * actually has a first map. General on purpose: it reads the WAD rather
++         * than assuming anything about which WAD is present.
++         */
++        while (EpiDef.numitems > 1
++                && DOOM.wadLoader.CheckNumForName("E" + EpiDef.numitems + "M1") < 0) {
++            EpiDef.numitems--;
++        }
+     }
+ 
+     
+diff -ruN a/mochadoom/Engine.java b/mochadoom/Engine.java
+--- a/mochadoom/Engine.java	2026-08-16 10:11:22.872004000 -0500
++++ b/mochadoom/Engine.java	2026-08-16 10:11:22.076328200 -0500
+@@ -35,7 +35,27 @@
+ 
+ public class Engine {
+     private static volatile Engine instance;
+-    
++
++    /**
++     * DbrDoomMod: builds an engine that never touches AWT. Minecraft owns the
++     * window, so no JFrame or Canvas is created and windowController stays null.
++     */
++    public static Engine createHeadless(final String... argv) throws IOException {
++        synchronized (Engine.class) {
++            return new Engine(true, argv);
++        }
++    }
++
++    /**
++     * DbrDoomMod: drops the singleton so a new session can be started.
++     * Without this, /DoomPlay would only ever work once per Minecraft launch.
++     */
++    public static void resetInstance() {
++        synchronized (Engine.class) {
++            instance = null;
++        }
++    }
++
+     /**
+      * Mocha Doom engine entry point
+      */
+@@ -67,20 +87,38 @@
+     public final ConfigManager cm;
+     public final DoomWindowController<?, EventHandler> windowController;
+     private final DoomMain<?, ?> DOOM;
+-    
++
++    /** DbrDoomMod: true when running inside Minecraft, with no AWT window. */
++    private final boolean headless;
++
+     @SuppressWarnings("unchecked")
+     private Engine(final String... argv) throws IOException {
++        this(false, argv);
++    }
++
++    @SuppressWarnings("unchecked")
++    private Engine(final boolean headless, final String... argv) throws IOException {
+         instance = this;
+-        
++        this.headless = headless;
++
+         // reads command line arguments
+         this.cvm = new CVarManager(Arrays.asList(argv));
+-        
++
+         // reads default.cfg and mochadoom.cfg
+         this.cm = new ConfigManager();
+-        
++
+         // intiializes stuff
+         this.DOOM = new DoomMain<>();
+-        
++
++        /**
++         * DbrDoomMod: stop here when embedded. Everything below builds the AWT
++         * frame and its input listeners, which Minecraft replaces.
++         */
++        if (headless) {
++            this.windowController = null;
++            return;
++        }
++
+         // opens a window
+         this.windowController = /*cvm.bool(CommandVariable.AWTFRAME)
+             ? */DoomWindow.createCanvasWindowController(
+@@ -131,9 +169,27 @@
+     
+     /**
+      * Temporary solution. Will be later moved in more detalied place
++     *
++     * DbrDoomMod: no-op when headless. The engine calls this from D_Display to
++     * push the finished frame to the AWT window; embedded, Minecraft pulls the
++     * frame from the graphics system instead.
+      */
+     public static void updateFrame() {
+-        instance.windowController.updateFrame();
++        final Engine local = instance;
++        if (local == null || local.windowController == null) {
++            return;
++        }
++        local.windowController.updateFrame();
++    }
++
++    /** DbrDoomMod: lets the host reach the engine it just built. */
++    public DoomMain<?, ?> getDOOM() {
++        return DOOM;
++    }
++
++    /** DbrDoomMod: true when no AWT window backs this engine. */
++    public boolean isHeadless() {
++        return headless;
+     }
+         
+     public String getWindowTitle(double frames) {
+diff -ruN a/s/ClipSFXModule.java b/s/ClipSFXModule.java
+--- a/s/ClipSFXModule.java	2026-08-16 10:11:23.741502300 -0500
++++ b/s/ClipSFXModule.java	2026-08-16 10:11:22.079193100 -0500
+@@ -182,11 +182,27 @@
+ 		  //fprintf( stderr, "I_ShutdownSound: NOT finishing pending sounds\n");
+ 		  //fflush( stderr );
+ 		  
++		  /**
++		   * DbrDoomMod: upstream spins here with no sleep and no way out, so a
++		   * channel that never goes inactive hangs the caller forever at 100%
++		   * CPU. Closing a session must always finish, so this now yields and
++		   * gives up after a second; a sound cut short beats a wedged thread.
++		   */
++		  final long deadline = System.currentTimeMillis() + 1000L;
+ 		  while ( !done)
+ 		  {
+ 		    for( i=0 ; i<numChannels && ((channels[i]==null)||(!channels[i].isActive())) ; i++);
+ 		    // FIXME. No proper channel output.
+ 		    if (i==numChannels)  done=true;
++		    else if (System.currentTimeMillis() > deadline) done=true;
++		    else {
++		      try {
++		        Thread.sleep(1);
++		      } catch (InterruptedException ie) {
++		        Thread.currentThread().interrupt();
++		        done=true;
++		      }
++		    }
+ 		  }
+ 		  
+ 		  for( i=0 ; i<numChannels; i++){
+diff -ruN a/utils/C2JUtils.java b/utils/C2JUtils.java
+--- a/utils/C2JUtils.java	2026-08-16 10:11:23.911113700 -0500
++++ b/utils/C2JUtils.java	2026-08-16 10:11:21.867858300 -0500
+@@ -773,10 +773,11 @@
+                 + " objects of class " + c.getName() + "!");
+             throw new com.dbr.doom.host.DoomExitException(-1);
+         }
+-
+-        return null;
++        // DbrDoomMod: the trailing "return null;" was dead once System.exit()
++        // became a throw, since the try always returns and the catch never
++        // completes normally.
+     }
+-	
++
+ 	public final static<T> T[] getNewArray(int size,T instance){
+ 		@SuppressWarnings("unchecked")
+ 		Class<T> c=(Class<T>) instance.getClass();
+@@ -793,8 +794,7 @@
+                     + " objects of class " + c.getName() + "!");
+             throw new com.dbr.doom.host.DoomExitException(-1);
+         }
+-        
+-        return null;
++        // DbrDoomMod: dead "return null;" removed, same reason as above.
+ 	}
+ 
+     /**

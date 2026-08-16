@@ -1,0 +1,16 @@
+[
+{
+  "modid": "dbrdoom",
+  "name": "DbrDoomMod",
+  "description": "Craft an arcade cabinet and play Doom on its screen, in world, while Minecraft keeps running. Powered by the Mocha Doom engine (GPLv3), with Freedoom game data bundled so it works out of the box. Own DOOM.WAD? Drop it in config/dbrdoom/wads/. Install on client and server.",
+  "version": "${version}",
+  "mcversion": "${mcversion}",
+  "url": "",
+  "updateUrl": "",
+  "authorList": ["elcorremachitos"],
+  "credits": "Mocha Doom by Victor Epitropou (Velktron), Alexandre-Xavier Labonte-Lamoureux and Good Sign. Doom by id Software. Bundled game data is Freedoom, (c) 2001-2024 Contributors to the Freedoom project, three-clause BSD licence, https://freedoom.github.io/",
+  "logoFile": "",
+  "screenshots": [],
+  "dependencies": []
+}
+]
