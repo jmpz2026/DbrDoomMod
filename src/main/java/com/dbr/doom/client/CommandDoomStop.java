@@ -29,7 +29,7 @@ import net.minecraft.util.EnumChatFormatting;
 import com.dbr.doom.host.DoomHost;
 
 /**
- * {@code /DoomStop} - ends the current Doom session.
+ * /DoomStop - ends the current Doom session.
  *
  * Normally F10 or a double-tap of ESC is enough. This exists for the case where
  * the session is wedged and the GUI is not responding to input.

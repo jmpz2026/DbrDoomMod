@@ -44,6 +44,9 @@ Engine and rendering are **client only**. The block exists on both sides, so thi
 is a two-sided mod and the server needs it installed. Anything client-only lives
 behind `CommonProxy` / `ClientProxy`.
 
+One exception, and it is deliberate: `com.dbr.doom.verify` runs the engine
+**server side**, headless, to replay a recorded run. See "Rewards" below.
+
 ```
 BlockDoomArcade          right click -> server grants the claim
 TileEntityDoomArcade     who is using it, server authoritative
@@ -145,6 +148,69 @@ Minecraft 1.7.10, in rough order of how long they took:
 - **`compile.extendsFrom` no longer feeds the compile classpath** on Gradle 8.
   The dependency resolves and downloads, then the compile fails on a missing
   package. Extend `implementation`.
+
+## Rewards: verifying what a player actually did
+
+Rewards are paid on a **replay of the run**, never on anything the client says
+about itself. The client records a demo, the server replays it and pays for what
+comes out. `com.dbr.doom.verify.RunVerifier` is the replay half;
+`tools/spike/README.md` is the evidence that this works at all.
+
+- **Replay is deterministic, and that is measured, not assumed.** 32 replays
+  across two session lengths came out identical byte for byte and matched the
+  recording, with kills, random damage, item pickups and a death in them.
+  Roughly **660x real time**: a ten minute map verifies in about a second.
+- **The verifier ships in the mod jar, though the reward logic lives in a Bukkit
+  plugin.** It has to run against exactly the engine that recorded the demo. A
+  verifier built against a different Mocha Doom would desync silently and pay
+  wrong amounts with nothing in any log. Travelling in the same jar makes drift
+  impossible.
+- **The plugin loads it through a `URLClassLoader` with a null parent.** That
+  works because `com.dbr.doom.engine.**` references nothing outside itself but
+  `DoomExitException`, and `com.dbr.doom.verify` adds only the JDK. Everything
+  crossing the boundary is a String or a `byte[]`, which are bootstrap types.
+  A fresh classloader also means a fresh `Engine.instance`, so the engine's
+  singleton stops being an obstacle and becomes the isolation mechanism:
+  **verified working with four concurrent verifications**.
+- **Never silence the engine with `System.setOut`.** Those fields are global to
+  the JVM, not per classloader. Two verifications at once race to restore them
+  and the loser leaves the server's stdout pointing at a dead buffer,
+  permanently. Filter by thread name instead, the way `EngineOutputRouter`
+  already does; `RunVerifier` renames its thread to `DbrDoom-Verify` for exactly
+  this.
+- **Recording hooks `DoNewGame`, not `InitNew`.** `InitNew` has two other
+  callers and neither may be recorded. `DoPlayDemo` uses it for the attract-mode
+  demos on the title screen, which produced a demo of the engine playing itself
+  on whatever map the attract demo used. `DoLoadGame` uses it for a blank level
+  it then overwrites from the savegame, and a demo recorded from there **cannot
+  reproduce** - a replay starts the level fresh and applies the tics to a world
+  that never had the savegame in it. It is also the obvious exploit: save in
+  front of a boss, load, kill it, repeat.
+- **A run started by `dbrStartRun()` has a null `demoname`, and
+  `CheckDemoStatus` has to check for it.** Without that the engine writes to a
+  null path, fails, and reports the failure through `I_Error` - which is a
+  `DoomExitException`, so anything reaching `CheckDemoStatus` mid-session kills
+  it. The attract-mode demo loop does exactly that.
+- **`-timedemo`, not `-fastdemo`.** Only `-timedemo` sets `singletics`, which
+  unhooks the loop from the 35Hz clock. Despite the name, `-fastdemo` replays at
+  real time: 41 seconds to check a 40 second demo.
+- **A demo that never reaches a level is a failure, not a run worth nothing.**
+  Corrupt uploads, demos from another engine version and demos for maps this WAD
+  no longer has all look identical otherwise, and all of them are worth knowing
+  about.
+- **A finished run outlives the session that made it, so its queue is static.**
+  The most valuable run of all - everything the player did before leaving - is
+  only collected as the Doom thread winds down, which is *after* `stop()`. By
+  then `getActive()` returns null by design, so anything that drains through it
+  drops exactly the run that mattered. The first live test recorded 5714 bytes,
+  uploaded nothing and paid nothing, for precisely this reason. `getActive()` is
+  the wrong question for anything that happens on the way out.
+- **`MAPEND` works, confirmed on a live server** on 16 August 2026. It was the
+  last event never exercised - scripting a bot to an exit is not practical, so
+  it took a real player. A run finishing E1M1 verified in 339ms and paid
+  `mapComplete` and `firstClear`, with the amounts multiplied by the skill it
+  was played on. The prefix rule held in the same test: the second upload
+  reported the same 14 kills as the first and paid nothing for them again.
 
 ## Engine quirks worth knowing
 

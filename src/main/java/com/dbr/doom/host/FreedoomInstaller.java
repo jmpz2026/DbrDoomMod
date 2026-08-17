@@ -73,7 +73,7 @@ public final class FreedoomInstaller {
     }
 
     /**
-     * Writes any bundled file that is not already in {@code wadDir}.
+     * Writes any bundled file that is not already in wadDir.
      *
      * Existing files are left alone, so a player who deletes the WAD to save
      * space does not get it back on every launch, and anyone who drops in their

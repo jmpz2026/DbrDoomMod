@@ -85,8 +85,23 @@ public class TileEntityDoomArcade extends TileEntity {
             return false;
         }
 
-        occupantId = player.getUniqueID();
-        occupantName = player.getCommandSenderName();
+        final UUID id = player.getUniqueID();
+        final String name = player.getCommandSenderName();
+
+        /*
+         * Nothing would change, so nobody needs telling. sync() sends a block
+         * update to every client tracking the chunk and right clicking is not
+         * rate limited, so without this one incoming packet becomes one outgoing
+         * packet per nearby player. Compared rather than assumed, so a rename
+         * mid-session still refreshes the name people see.
+         */
+        if (name.equals(occupantName)
+                && (id == null ? occupantId == null : id.equals(occupantId))) {
+            return true;
+        }
+
+        occupantId = id;
+        occupantName = name;
         sync();
         return true;
     }

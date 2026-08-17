@@ -28,6 +28,10 @@ import net.minecraft.tileentity.TileEntity;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
 
+import cpw.mods.fml.common.FMLCommonHandler;
+import cpw.mods.fml.common.eventhandler.SubscribeEvent;
+import cpw.mods.fml.common.gameevent.PlayerEvent;
+
 /**
  * Keeps a player to one cabinet at a time.
  *
@@ -47,6 +51,24 @@ public final class ArcadeClaims {
     private static final Map<UUID, Location> HELD = new HashMap<UUID, Location>();
 
     private ArcadeClaims() {
+    }
+
+    /**
+     * Hooks the logout cleanup onto the FML bus. Called once, from preInit.
+     *
+     * A player who logs out mid-session never sends a release. The cabinet is
+     * freed by the poll in TileEntityDoomArcade.updateEntity, but the entry here
+     * would outlive them until a restart.
+     */
+    public static void register() {
+        FMLCommonHandler.instance().bus().register(new ArcadeClaims());
+    }
+
+    @SubscribeEvent
+    public void onLogout(PlayerEvent.PlayerLoggedOutEvent event) {
+        if (event.player != null) {
+            forget(event.player);
+        }
     }
 
     /** A cabinet, in a particular world. */

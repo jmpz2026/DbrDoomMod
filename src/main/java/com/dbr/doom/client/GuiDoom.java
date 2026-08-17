@@ -336,12 +336,12 @@ public class GuiDoom extends GuiScreen {
      *
      * This is not the same question as "is there a session", and the difference
      * froze the game. The engine boots on its own thread, and part of booting is
-     * running the static initialisers of classes like {@code event_t} and
-     * {@code ScanCode}. A class being initialised is locked by the thread doing
+     * running the static initialisers of classes like event_t and
+     * ScanCode. A class being initialised is locked by the thread doing
      * it, and any other thread that touches that class blocks until it finishes.
      *
      * Moving the mouse during that second was enough: the render thread reached
-     * {@code new event_t.mouseevent_t(...)}, waited on a lock the Doom thread
+     * new event_t.mouseevent_t(...), waited on a lock the Doom thread
      * held, and the client stopped dead with no exception and no crash report.
      *
      * The guard has to come before the engine is mentioned. An earlier version

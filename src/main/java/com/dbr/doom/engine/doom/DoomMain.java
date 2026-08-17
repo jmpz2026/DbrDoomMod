@@ -39,6 +39,7 @@ import com.dbr.doom.engine.i.IDoomSystem;
 import com.dbr.doom.engine.i.Strings;
 import java.awt.Rectangle;
 import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.FileInputStream;
@@ -1881,10 +1882,28 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
             memcpy(statcopy, wminfo, 1);
         }
 
+        /*
+         * DbrDoomMod: the player finished a map, so hand up what has been
+         * recorded so far and let them be paid for it without leaving.
+         *
+         * A copy, not a cut. The recording keeps going, because the demo can
+         * only ever start where the playthrough started: the next map is
+         * reached through DoLoadLevel, carrying the weapons and health of this
+         * one, while a replay of a demo beginning there would call InitNew and
+         * start with a pistol. Cutting per map would produce demos that replay
+         * into a different game, which is the one thing this must never do.
+         *
+         * So each of these is a prefix of the same run, and every one replays
+         * correctly from the beginning. The server pays the difference.
+         */
+        if (dbrAutoRecord && demorecording) {
+            dbrPendingRun = dbrSerialiseRun();
+        }
+
         WI_Start: {
             endLevel.Start(wminfo);
-        } 
-    } 
+        }
+    }
 
 
     /**
@@ -2119,8 +2138,17 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
         G_InitNew: {
             InitNew(d_skill, d_episode, d_map);
         }
+
+        /*
+         * DbrDoomMod: this is the only genuine start of a playthrough, so it is
+         * the only place a run may begin being recorded. See dbrStartRun().
+         */
+        if (dbrAutoRecord) {
+            dbrStartRun();
+        }
+
         gameaction = ga_nothing;
-    } 
+    }
 
     /**
      * G_InitNew
@@ -2257,7 +2285,138 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
                 levelLoadFailure();
             }
         }
-    } 
+    }
+
+    /*
+     * ------------------------------------------------------------------
+     * DbrDoomMod: recording a run so the server can verify what was played.
+     *
+     * Rewards are paid on a replay of the demo, never on anything the client
+     * claims, so a recording has to satisfy one property above all: replaying
+     * it must reproduce the session exactly. That is what decides where the
+     * recording may start.
+     *
+     * Upstream can only record when -record was on the command line, and begins
+     * it once from initLoop() with whatever map was current then. Inside the mod
+     * the player picks the map from the menu a minute later, so that is useless.
+     * ------------------------------------------------------------------
+     */
+
+    /** DbrDoomMod: set by the host; records every game the player starts. */
+    public volatile boolean dbrAutoRecord;
+
+    /**
+     * DbrDoomMod: the run that was cut short by the player starting another.
+     * Collected by the host through {@link #dbrTakePendingRun()}.
+     */
+    private volatile byte[] dbrPendingRun;
+
+    /**
+     * DbrDoomMod: begins recording the game DoNewGame has just set up.
+     *
+     * Hooked to DoNewGame rather than to InitNew, even though InitNew is where
+     * the level is really built, because InitNew has two other callers and
+     * neither may be recorded:
+     *
+     *   - DoPlayDemo, for the attract-mode demos on the title screen. Recording
+     *     one produced a demo of the engine playing itself, on whichever map
+     *     the attract demo used.
+     *   - DoLoadGame, which calls InitNew for a blank level and then overwrites
+     *     it from the savegame. A demo recorded from there cannot reproduce: a
+     *     replay would start the level fresh and apply the tics to a world that
+     *     never had the savegame in it. It is also the obvious exploit - save
+     *     in front of a boss, load, kill it, repeat.
+     *
+     * DoNewGame runs inside Ticker's gameaction loop, which finishes before the
+     * tic's commands are processed, so the first recorded command is the first
+     * command of the level. Playback starts at the same place, which is what
+     * makes the two symmetrical.
+     */
+    private void dbrStartRun() {
+        if (demorecording) {
+            // Starting a game while one was recording ends that one.
+            dbrPendingRun = dbrSerialiseRun();
+        }
+
+        /*
+         * A new lineage. Everything recorded from here is a prefix of a
+         * different playthrough, and its tics count from zero again, so the
+         * server has to be able to tell one lineage's prefixes from another's -
+         * otherwise it would read a restart as a run that shrank.
+         */
+        dbrRunSerial++;
+
+        /*
+         * Deliberately not RecordDemo(), which sets usergame false and names a
+         * file on disk. Nothing here writes anything; demoname stays null, and
+         * CheckDemoStatus reads that as "the host owns these bytes".
+         */
+        demoname = null;
+        demobuffer = new VanillaDoomDemo();
+        demorecording = true;
+        BeginRecording();
+    }
+
+    /**
+     * DbrDoomMod: ends the recording and returns the demo, or null if nothing
+     * was being recorded.
+     *
+     * Deliberately not CheckDemoStatus(), which writes the file and then reports
+     * it through I_Error - and I_Error is a DoomExitException here, so ending a
+     * recording that way would tear down the session the player is still in.
+     */
+    public byte[] dbrFinishRun() {
+        if (!demorecording) {
+            return null;
+        }
+        final byte[] demo = dbrSerialiseRun();
+        demorecording = false;
+        return demo;
+    }
+
+    /** DbrDoomMod: the header, every tic and the end marker, as bytes. */
+    private byte[] dbrSerialiseRun() {
+        try {
+            final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            final DataOutputStream out = new DataOutputStream(bytes);
+            demobuffer.write(out);
+            out.flush();
+            return bytes.toByteArray();
+        } catch (IOException e) {
+            System.err.println("Could not serialise the Doom run: " + e);
+            return null;
+        }
+    }
+
+    /**
+     * DbrDoomMod: takes the run the player ended by starting another one, or
+     * null. Polled by the host between frames.
+     */
+    public byte[] dbrTakePendingRun() {
+        final byte[] pending = dbrPendingRun;
+        dbrPendingRun = null;
+        return pending;
+    }
+
+    /** DbrDoomMod: true while a run is being recorded. */
+    public boolean dbrIsRecording() {
+        return demorecording;
+    }
+
+    /**
+     * DbrDoomMod: which playthrough the current recording belongs to.
+     *
+     * Every upload carries this. Snapshots of one playthrough share it and grow
+     * monotonically; starting a new game bumps it and the tics start over.
+     * Without it the server cannot tell "they played on" from "they started
+     * again", and would credit the second playthrough as though it were the
+     * first one shrinking.
+     */
+    public int dbrRunSerial() {
+        return dbrRunSerial;
+    }
+
+    private volatile int dbrRunSerial;
 
     protected void levelLoadFailure() {
         boolean endgame = doomSystem.GenerateAlert(Strings.LEVEL_FAILURE_TITLE, Strings.LEVEL_FAILURE_CAUSE);
@@ -2477,11 +2636,24 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
             return true; 
         } 
 
-        if (demorecording) 
-        { 
-            //demobuffer[demo_p++] = (byte) DEMOMARKER; 
+        if (demorecording)
+        {
+            /*
+             * DbrDoomMod: a run recorded by dbrStartRun() has no filename,
+             * because the host takes it as bytes. Without this the engine
+             * writes to a null path, fails, and reports the failure through
+             * I_Error - which is a DoomExitException here, so anything that
+             * ends up in CheckDemoStatus during a session would kill it. The
+             * attract-mode demo loop does exactly that.
+             */
+            if (demoname == null) {
+                demorecording = false;
+                return false;
+            }
 
-            MenuMisc.WriteFile(demoname, demobuffer); 
+            //demobuffer[demo_p++] = (byte) DEMOMARKER;
+
+            MenuMisc.WriteFile(demoname, demobuffer);
             //Z_Free (demobuffer); 
             demorecording = false; 
             doomSystem.Error ("Demo %s recorded",demoname); 

@@ -24,6 +24,8 @@ import net.minecraft.client.gui.GuiScreen;
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
 import cpw.mods.fml.common.gameevent.TickEvent;
 
+import com.dbr.doom.client.reward.RunUploader;
+
 /**
  * Opens screens one tick after they are asked for.
  *
@@ -36,7 +38,7 @@ public class ClientTickHandler {
 
     private static volatile GuiScreen pendingScreen;
 
-    /** Asks for {@code gui} to be shown on the next client tick. */
+    /** Asks for gui to be shown on the next client tick. */
     public static void requestOpen(GuiScreen gui) {
         pendingScreen = gui;
     }
@@ -59,6 +61,13 @@ public class ClientTickHandler {
         if (event.phase != TickEvent.Phase.END) {
             return;
         }
+
+        /*
+         * Sends whatever the engine has finished recording, one chunk at a
+         * time. Unconditional: a run is most often produced by a session that
+         * has just ended, so waiting for one to exist would drop the last one.
+         */
+        RunUploader.tick();
 
         final GuiScreen gui = pendingScreen;
         if (gui == null) {

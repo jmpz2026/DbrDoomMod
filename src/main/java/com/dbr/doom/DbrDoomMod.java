@@ -32,6 +32,7 @@ import cpw.mods.fml.common.registry.GameRegistry;
 
 import org.apache.logging.log4j.Logger;
 
+import com.dbr.doom.block.ArcadeClaims;
 import com.dbr.doom.block.BlockDoomArcade;
 import com.dbr.doom.block.TileEntityDoomArcade;
 import com.dbr.doom.network.DoomNetwork;
@@ -69,7 +70,7 @@ public class DbrDoomMod {
 
     private static Logger logger;
 
-    /** {@code config/dbrdoom/} - holds wads, saves and the engine config files. */
+    /** config/dbrdoom/ - holds wads, saves and the engine config files. */
     private static File baseDir;
 
     @Mod.EventHandler
@@ -95,6 +96,7 @@ public class DbrDoomMod {
          * is where the handovers land.
          */
         ServerTaskQueue.register();
+        ArcadeClaims.register();
 
         proxy.preInit(event.getSuggestedConfigurationFile(), baseDir);
     }

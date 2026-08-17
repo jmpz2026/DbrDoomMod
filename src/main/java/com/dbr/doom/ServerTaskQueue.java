@@ -35,19 +35,16 @@ import cpw.mods.fml.common.gameevent.TickEvent;
  * Packet handlers are called on the network thread, so anything that touches
  * the world - a tile entity, a block update - has to be handed over first.
  * 1.7.10 has no way to do that: the client has
- * {@code Minecraft.func_152344_a(Runnable)}, but MinecraftServer did not get a
+ * Minecraft.func_152344_a(Runnable), but MinecraftServer did not get a
  * task queue of its own until 1.8, so this is that queue.
  *
  * Tasks are drained at the end of a server tick, which is a point where the
  * world is not mid-update.
  *
- * <h3>Why there is a per-player cap</h3>
- *
- * Everything queued here arrives from a packet, and a client can send packets as
- * fast as it likes. With one shared limit, a player spamming the channel would
- * fill the queue and everyone else's work would be dropped along with theirs -
- * their cabinets would stay claimed. A player can therefore only ever hold a few
- * slots, and overflowing costs them nothing but their own tasks.
+ * Everything here arrives from a packet, and a client can send packets as fast
+ * as it likes. With one shared limit a player spamming the channel fills the
+ * queue and everyone else's work is dropped with theirs, leaving their cabinets
+ * claimed. So a player can only ever hold a few slots.
  */
 public final class ServerTaskQueue {
 

@@ -32,6 +32,8 @@ import cpw.mods.fml.common.FMLCommonHandler;
 import com.dbr.doom.CommonProxy;
 import com.dbr.doom.DbrDoomMod;
 import com.dbr.doom.DoomConfig;
+import com.dbr.doom.client.reward.RewardChannel;
+import com.dbr.doom.client.reward.WadFingerprint;
 import com.dbr.doom.block.TileEntityDoomArcade;
 import com.dbr.doom.host.DoomHost;
 import com.dbr.doom.host.EngineOutputRouter;
@@ -77,6 +79,14 @@ public class ClientProxy extends CommonProxy {
 
         ClientRegistry.bindTileEntitySpecialRenderer(
             TileEntityDoomArcade.class, new TileEntityDoomArcadeRenderer());
+
+        /*
+         * A second, separate channel, spoken to the rewards plugin rather than
+         * to the mod on the server. Registering it is also how the plugin
+         * discovers this client has the mod, so it happens whether or not a
+         * plugin is listening.
+         */
+        RewardChannel.init();
     }
 
     /**
@@ -133,6 +143,16 @@ public class ClientProxy extends CommonProxy {
             return;
         }
 
+        /*
+         * Tell the plugin which WAD this run will be played on. A run can only
+         * be verified against the data it was played on.
+         *
+         * On its own thread: fingerprinting is SHA-256 over twelve megabytes, a
+         * visible stall on the client thread. Nothing waits for it, and the
+         * answer is cached, so it costs this once per launch.
+         */
+        announceWad(wad.getFile());
+
         try {
             final DoomHost host = DoomHost.start(wad.getFile(), DbrDoomMod.baseDir());
             /*
@@ -145,6 +165,30 @@ public class ClientProxy extends CommonProxy {
             say(EnumChatFormatting.RED + "Could not start Doom: " + e);
             releaseClaim(x, y, z);
         }
+    }
+
+    /**
+     * Fingerprints the WAD and tells the plugin about it, off the client thread.
+     *
+     * Nothing here can fail in a way that stops a player playing: a server with
+     * no plugin ignores it, and a hash that cannot be computed only means this
+     * run will not be paid for.
+     */
+    private static void announceWad(final File wad) {
+        final Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    RewardChannel.sendHello(WadFingerprint.of(wad));
+                } catch (Throwable t) {
+                    DbrDoomMod.logger().warn("Could not announce the WAD to the server", t);
+                }
+            }
+        }, "DbrDoom-Fingerprint");
+
+        // Never hold the game open on account of a reward announcement.
+        thread.setDaemon(true);
+        thread.start();
     }
 
     /**

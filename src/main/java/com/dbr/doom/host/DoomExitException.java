@@ -19,18 +19,16 @@
 package com.dbr.doom.host;
 
 /**
- * Replaces the {@code System.exit()} calls of the vendored Doom engine.
+ * Replaces the System.exit() calls of the vendored Doom engine.
  *
- * Standalone Mocha Doom quits by calling {@code System.exit()} in 18 places.
+ * Standalone Mocha Doom quits by calling System.exit() in 18 places.
  * Inside Minecraft that would take the whole game down with it, so the vendoring
  * script rewrites every one of them into a throw of this class. The Doom thread
  * catches it, tears the session down and closes the GUI.
  *
- * <h3>Why this extends Error and not Exception</h3>
- *
- * The engine is full of broad {@code catch (Exception e)} blocks. A
+ * The engine is full of broad catch (Exception e) blocks. A
  * RuntimeException would get swallowed by one of them and the engine would keep
- * running in a state it had already decided was unrecoverable. {@code System.exit()}
+ * running in a state it had already decided was unrecoverable. System.exit()
  * could not be swallowed, and neither should its replacement, so this extends
  * Error to preserve the original semantics.
  *
@@ -47,7 +45,7 @@ public class DoomExitException extends Error {
         this.exitCode = exitCode;
     }
 
-    /** The code the engine originally passed to {@code System.exit()}. */
+    /** The code the engine originally passed to System.exit(). */
     public int getExitCode() {
         return exitCode;
     }

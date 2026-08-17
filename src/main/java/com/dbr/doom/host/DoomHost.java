@@ -24,6 +24,8 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import com.dbr.doom.DbrDoomMod;
 import com.dbr.doom.DoomConfig;
@@ -45,6 +47,14 @@ public final class DoomHost {
 
     /** Doom's fixed tic rate. Not configurable: the game logic assumes it. */
     public static final int TICRATE = 35;
+
+    /**
+     * How many finished runs may wait to be sent before the oldest is dropped.
+     *
+     * A run is produced only when the player starts a new game or ends the
+     * session, so more than a couple waiting means nothing is draining them.
+     */
+    private static final int MAX_PENDING_RUNS = 8;
 
     private static DoomHost active;
 
@@ -77,6 +87,52 @@ public final class DoomHost {
 
     /** stop() is reachable from the GUI, from /DoomStop and from the engine quitting. */
     private volatile boolean stopped;
+
+    /**
+     * Runs the player has finished, waiting to be sent to the server.
+     *
+     * Filled by the Doom thread and drained by the client thread, because the
+     * engine may only be touched from the thread that drives it: reading a demo
+     * out while the engine is still appending tics to it would produce a demo
+     * that replays into something else, which is exactly the failure this whole
+     * mechanism exists to make impossible.
+     *
+     * A run outlives the session that produced it: the last one is collected as
+     * the Doom thread winds down, after {@link #stop()}, when
+     * {@link #getActive()} already returns null by design. A queue hanging off
+     * the instance would be filled and never looked at again.
+     *
+     * One engine exists at a time, enforced by the engine's own singleton, so
+     * there is no ambiguity about whose runs these are.
+     */
+    private static final Queue<Run> COMPLETED_RUNS = new ConcurrentLinkedQueue<Run>();
+
+    /**
+     * One upload: the demo, and which playthrough it belongs to.
+     *
+     * A run is uploaded more than once - once per map finished, so the player is
+     * paid without leaving the cabinet - and each upload is a longer prefix of
+     * the same recording. The serial is what lets the server tell those apart
+     * from a fresh playthrough, whose tics start over from zero.
+     */
+    public static final class Run {
+
+        private final int serial;
+        private final byte[] data;
+
+        Run(int serial, byte[] data) {
+            this.serial = serial;
+            this.data = data;
+        }
+
+        public int getSerial() {
+            return serial;
+        }
+
+        public byte[] getData() {
+            return data;
+        }
+    }
 
     private DoomHost(File iwad, File baseDir) {
         this.iwad = iwad;
@@ -270,9 +326,17 @@ public final class DoomHost {
             doom.setupSession();
             doom.initLoop();
 
+            /*
+             * Record every game the player starts, so the server can verify what
+             * they did rather than take their word for it. Costs four bytes a
+             * tic and touches nothing else.
+             */
+            doom.dbrAutoRecord = true;
+
             while (running && !Thread.currentThread().isInterrupted()) {
                 doom.runOneFrame();
                 publishFrame();
+                collectFinishedRun();
             }
         } catch (DoomExitException exit) {
             // The engine asked to quit. Only a non-zero code is worth reporting.
@@ -283,6 +347,14 @@ public final class DoomHost {
             failure = t;
         } finally {
             /*
+             * The run in progress when the session ended. Taken here, on the
+             * Doom thread, for the same reason the audio is: this is the last
+             * moment the engine belongs to us. A player who quits mid-map has
+             * still earned whatever they did up to that point.
+             */
+            takeFinalRun();
+
+            /*
              * Audio has to be torn down here, on the Doom thread, and not in
              * stop(). ShutdownSound() waits on playing channels, so calling it
              * from Minecraft's client thread would stall the whole game.
@@ -290,6 +362,76 @@ public final class DoomHost {
             shutdownAudio();
             finished = true;
         }
+    }
+
+    /**
+     * Collects a run the player ended by starting another one.
+     *
+     * Polled between frames rather than pushed by the engine, so the engine
+     * needs to know nothing about where its demos end up.
+     */
+    private void collectFinishedRun() {
+        final DoomMain<?, ?> local = doom;
+        if (local == null) {
+            return;
+        }
+
+        final byte[] run = local.dbrTakePendingRun();
+        if (run != null) {
+            offerRun(local.dbrRunSerial(), run);
+        }
+    }
+
+    /** Closes the recording that was still going when the session ended. */
+    private void takeFinalRun() {
+        final DoomMain<?, ?> local = doom;
+        if (local == null) {
+            // The engine never finished booting, so nothing was recorded.
+            return;
+        }
+
+        try {
+            // Anything the engine had already set aside, then the live one.
+            collectFinishedRun();
+
+            final byte[] run = local.dbrFinishRun();
+            if (run != null) {
+                offerRun(local.dbrRunSerial(), run);
+            }
+        } catch (Throwable t) {
+            // A run that cannot be collected is a lost reward, never a crash.
+            DbrDoomMod.logger().warn("Could not collect the final Doom run", t);
+        }
+    }
+
+    private static void offerRun(int serial, byte[] run) {
+        /*
+         * A player who never stops playing would otherwise grow this without
+         * limit. The client thread drains it every tick, so reaching this means
+         * something is already wrong and the oldest run is the least valuable.
+         */
+        while (COMPLETED_RUNS.size() >= MAX_PENDING_RUNS) {
+            COMPLETED_RUNS.poll();
+            DbrDoomMod.logger().warn(
+                "Dropping an unsent Doom run: {} are already waiting",
+                Integer.valueOf(MAX_PENDING_RUNS));
+        }
+
+        COMPLETED_RUNS.add(new Run(serial, run));
+        DbrDoomMod.logger().info("Recorded a Doom run of {} bytes (playthrough {})",
+            new Object[] { Integer.valueOf(run.length), Integer.valueOf(serial) });
+    }
+
+    /**
+     * Takes the next finished run, or null. Called from the client thread.
+     *
+     * Static, and callable with no session running at all: the last run of a
+     * session only appears once that session is already gone.
+     *
+     * @see #COMPLETED_RUNS
+     */
+    public static Run pollCompletedRun() {
+        return COMPLETED_RUNS.poll();
     }
 
     /**

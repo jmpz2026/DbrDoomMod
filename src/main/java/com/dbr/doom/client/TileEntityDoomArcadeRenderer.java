@@ -18,7 +18,7 @@
 
 package com.dbr.doom.client;
 
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 import org.lwjgl.opengl.GL11;
@@ -67,14 +67,26 @@ public class TileEntityDoomArcadeRenderer extends TileEntitySpecialRenderer {
     private static final double BOTTOM = 0.25D;
     private static final double TOP = 0.8125D;
 
+    /** How many cabinets are remembered for throttling purposes. */
+    private static final int DIAGNOSTIC_MEMORY = 32;
+
     /**
      * When each cabinet last explained itself, keyed by position.
      *
      * One renderer instance serves every cabinet, so a single timestamp let the
      * nearest one starve the rest: with two in view, the one being played
      * reported nothing and the log only ever showed the idle one next to it.
+     *
+     * Bounded, oldest first: otherwise it keeps an entry per cabinet ever seen,
+     * a slow leak in a map that exists only to rate limit a log line.
      */
-    private final Map<Long, Long> lastDiagnostic = new HashMap<Long, Long>();
+    private final Map<Long, Long> lastDiagnostic =
+        new LinkedHashMap<Long, Long>(DIAGNOSTIC_MEMORY, 0.75F, false) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<Long, Long> eldest) {
+                return size() > DIAGNOSTIC_MEMORY;
+            }
+        };
 
     /** Proves the quad is actually drawn, and on which face. */
     private boolean loggedFirstDraw;

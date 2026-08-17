@@ -25,14 +25,12 @@ import net.minecraft.world.World;
 /**
  * An invisible eye that Minecraft can render the world from.
  *
- * Minecraft draws the world from {@code Minecraft.renderViewEntity}, which does
+ * Minecraft draws the world from Minecraft.renderViewEntity, which does
  * not have to be the player. Pointing it at one of these puts the camera exactly
  * in front of an arcade screen without touching the player's body, which is the
  * only way to get a level view of a cabinet standing on the floor: its screen is
  * at knee height, so lining a standing player's eyes up with it would mean
  * burying them a metre in the ground.
- *
- * <h3>Known problem</h3>
  *
  * An earlier build using this froze the client hard enough to need killing, with
  * no crash report and no Java exception. The cause is not yet understood, which

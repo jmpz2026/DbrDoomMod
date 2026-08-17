@@ -17,3 +17,8 @@ eclipse/
 # Freedoom is the exception. It is BSD licensed and meant to be redistributed,
 # and it is what makes the mod work out of the box. See third-party/freedoom/.
 !src/main/resources/assets/dbrdoom/wads/*.wad
+# Phase 0 spike scratch: compiled classes, generated demos and engine config.
+tools/spike/out/
+tools/spike/work/
+tools/spike/rtwork/
+tools/spike/vwork/

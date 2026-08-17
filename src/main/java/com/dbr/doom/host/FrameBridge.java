@@ -93,14 +93,14 @@ public final class FrameBridge {
 
     /**
      * Called from Minecraft's render thread. Expands the latest frame into
-     * {@code argbOut} as ARGB, ready to hand to a texture upload.
+     * argbOut as ARGB, ready to hand to a texture upload.
      *
      * The copy happens under the lock but the expansion does not, so the Doom
      * thread is blocked only for a 64KB memcpy rather than for 64000 lookups.
      *
      * @param argbOut destination, at least {@link #getPixelCount()} long
      * @return false if no new frame arrived since the last call, leaving
-     *         {@code argbOut} untouched so the caller can reuse its texture
+     *         argbOut untouched so the caller can reuse its texture
      */
     public boolean drainInto(int[] argbOut) {
         synchronized (lock) {
