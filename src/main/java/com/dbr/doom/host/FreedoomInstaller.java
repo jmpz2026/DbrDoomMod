@@ -19,35 +19,48 @@
 package com.dbr.doom.host;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-
 import java.io.OutputStream;
+import java.security.MessageDigest;
 
 import org.tukaani.xz.XZInputStream;
 
 import com.dbr.doom.DbrDoomMod;
 
 /**
- * Unpacks the bundled Freedoom game data on first run, so /DoomPlay works
- * without the player having to find a WAD anywhere.
+ * Puts the bundled Freedoom data on disk and keeps it that way.
  *
- * Freedoom is a free replacement for Doom's game data, licensed under a
- * three-clause BSD licence that permits redistribution, and modification, in
- * binary form as long as its copyright notice and disclaimer travel with it.
- * The licence, credits and a note saying which maps were removed are unpacked
- * alongside the WAD for exactly that reason, and must not be dropped.
+ * The mod plays one WAD: the Freedoom Episode 1 that ships in the jar. It is not
+ * a default that a player may replace - it is the only thing the engine is ever
+ * pointed at, so every client is playing the same game and a run recorded on one
+ * means the same thing on another.
  *
- * The real Doom data is a different matter: DOOM.WAD and DOOM2.WAD are
- * proprietary and are never bundled. A player who owns them can drop them into
- * the same folder and the mod will find them.
+ * That is why this checks rather than only installs. A WAD that has been swapped
+ * for another is restored on the next launch, which keeps an edited copy - one
+ * with weaker monsters, or ammo in convenient places - from quietly becoming
+ * what a session is played on.
+ *
+ * The server has its own defence and does not rely on this one: it pays only for
+ * runs whose WAD hash is in its allowlist, and it replays against its own copy.
+ * This is what stops the client drifting in the first place.
+ *
+ * Freedoom is licensed under a three-clause BSD licence that permits
+ * redistribution and modification in binary form as long as its copyright notice
+ * and disclaimer travel with it. The licence, credits and a note saying which
+ * maps were removed are unpacked alongside the WAD for exactly that reason, and
+ * must not be dropped.
  *
  * @see <a href="https://freedoom.github.io/">freedoom.github.io</a>
  */
 public final class FreedoomInstaller {
 
     private static final String RESOURCE_ROOT = "/assets/dbrdoom/wads/";
+
+    /** The one WAD this mod plays. Named by the engine, so it cannot change. */
+    public static final String IWAD_NAME = "freedoom1.wad";
 
     /**
      * What ships in the jar.
@@ -61,7 +74,7 @@ public final class FreedoomInstaller {
      * them to accompany the binary.
      */
     private static final String[] BUNDLED = {
-        "freedoom1.wad.xz",
+        IWAD_NAME + ".xz",
         "COPYING-freedoom.txt",
         "CREDITS-freedoom.txt",
         "MODIFICATIONS-freedoom.txt",
@@ -69,28 +82,36 @@ public final class FreedoomInstaller {
 
     private static final String XZ_SUFFIX = ".xz";
 
+    /**
+     * Records the size and hash of the WAD as it was written.
+     *
+     * Without it, telling "the file we unpacked" from "a file of the same name"
+     * would mean decompressing the resource on every launch to compare against
+     * it. With it the usual case is a stat and a hash of what is already there.
+     */
+    private static final String STAMP_NAME = ".freedoom-stamp";
+
     private FreedoomInstaller() {
     }
 
     /**
-     * Writes any bundled file that is not already in wadDir.
+     * Unpacks whatever is missing, and restores the WAD if it is not the one
+     * that was unpacked.
      *
-     * Existing files are left alone, so a player who deletes the WAD to save
-     * space does not get it back on every launch, and anyone who drops in their
-     * own DOOM.WAD is never overwritten.
-     *
-     * @return the number of files actually written
+     * @return the number of files written
      */
-    public static int installIfMissing(File wadDir) throws IOException {
+    public static int ensureInstalled(File wadDir) throws IOException {
         if (!wadDir.isDirectory() && !wadDir.mkdirs()) {
             throw new IOException("could not create " + wadDir.getAbsolutePath());
         }
 
-        // A marker file records that we have unpacked once already. Without it,
-        // deleting every WAD on purpose would silently restore them next launch.
-        final File marker = new File(wadDir, ".freedoom-installed");
-        if (marker.isFile()) {
-            return 0;
+        /*
+         * Left by the version that only ever installed once. It meant "do not
+         * unpack again", which is no longer a thing this can promise.
+         */
+        final File legacyMarker = new File(wadDir, ".freedoom-installed");
+        if (legacyMarker.isFile()) {
+            legacyMarker.delete();
         }
 
         int written = 0;
@@ -101,42 +122,125 @@ public final class FreedoomInstaller {
                 : name;
 
             final File target = new File(wadDir, targetName);
-            if (target.isFile()) {
+            final boolean isIwad = IWAD_NAME.equals(targetName);
+
+            /*
+             * The WAD is checked, the licence and credits only have to exist. A
+             * player who edits CREDITS-freedoom.txt is not changing the game.
+             */
+            if (target.isFile() && !(isIwad && !matchesStamp(wadDir, target))) {
                 continue;
             }
+
+            if (isIwad && target.isFile()) {
+                DbrDoomMod.logger().warn(
+                    "{} is not the WAD that ships with the mod; restoring it", targetName);
+            }
+
             if (extract(RESOURCE_ROOT + name, target, compressed)) {
                 written++;
+                if (isIwad) {
+                    writeStamp(wadDir, target);
+                }
             }
-        }
-
-        if (!marker.createNewFile()) {
-            /*
-             * Not fatal, and not worth failing a successful unpack over: the
-             * worst case is that the check runs again next launch and finds
-             * every file already in place. Throwing here reported a 28MB WAD
-             * that had just been written correctly as a failed install.
-             */
-            DbrDoomMod.logger().warn("Could not create marker {}; the unpack check will run again next launch",
-                marker.getAbsolutePath());
         }
 
         return written;
+    }
+
+    /** True if the file on disk is the one the stamp was written for. */
+    private static boolean matchesStamp(File wadDir, File wad) {
+        final File stamp = new File(wadDir, STAMP_NAME);
+        if (!stamp.isFile()) {
+            return false;
+        }
+
+        InputStream in = null;
+        try {
+            in = new FileInputStream(stamp);
+            final byte[] raw = new byte[256];
+            final int read = in.read(raw);
+            if (read <= 0) {
+                return false;
+            }
+
+            final String[] parts = new String(raw, 0, read, "US-ASCII").trim().split(" ");
+            if (parts.length != 2) {
+                return false;
+            }
+
+            // Size first: it settles the usual case without reading 12MB.
+            if (Long.parseLong(parts[0]) != wad.length()) {
+                return false;
+            }
+            return parts[1].equals(hash(wad));
+        } catch (Exception e) {
+            return false;
+        } finally {
+            closeQuietly(in);
+        }
+    }
+
+    private static void writeStamp(File wadDir, File wad) {
+        OutputStream out = null;
+        try {
+            out = new FileOutputStream(new File(wadDir, STAMP_NAME));
+            out.write((wad.length() + " " + hash(wad)).getBytes("US-ASCII"));
+        } catch (Exception e) {
+            /*
+             * Not fatal: without a stamp the next launch decides the WAD is not
+             * ours and unpacks it again, which is wasteful but correct.
+             */
+            DbrDoomMod.logger().warn("Could not write {}: {}", STAMP_NAME, e.toString());
+        } finally {
+            closeQuietly(out);
+        }
+    }
+
+    /** SHA-256 of a file, lower case hex. */
+    private static String hash(File file) throws IOException {
+        final MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (Exception e) {
+            throw new IOException("SHA-256 is unavailable", e);
+        }
+
+        final InputStream in = new FileInputStream(file);
+        try {
+            final byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = in.read(buffer)) > 0) {
+                digest.update(buffer, 0, read);
+            }
+        } finally {
+            closeQuietly(in);
+        }
+
+        final StringBuilder out = new StringBuilder(64);
+        for (byte b : digest.digest()) {
+            final int v = b & 0xFF;
+            if (v < 0x10) {
+                out.append('0');
+            }
+            out.append(Integer.toHexString(v));
+        }
+        return out.toString();
     }
 
     /**
      * Copies one jar resource to disk, decompressing it on the way if needed.
      *
      * Writes to a temporary file first: an interrupted launch would otherwise
-     * leave a half-written 28MB WAD, which the engine rejects deep in its loader
-     * with an error that explains nothing.
+     * leave a half-written WAD, which the engine rejects deep in its loader with
+     * an error that explains nothing.
      */
     private static boolean extract(String resource, File target, boolean compressed)
             throws IOException {
 
         InputStream in = FreedoomInstaller.class.getResourceAsStream(resource);
         if (in == null) {
-            // Someone built a jar without the game data. Not fatal: the player
-            // can still supply their own WAD.
+            // Someone built a jar without the game data.
             return false;
         }
 
@@ -167,7 +271,7 @@ public final class FreedoomInstaller {
             closeQuietly(in);
             closeQuietly(out);
             if (temp.exists()) {
-                // Best effort: a leftover .part is harmless, WadLocator ignores it.
+                // Best effort: a leftover .part is harmless and never loaded.
                 temp.delete();
             }
         }

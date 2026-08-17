@@ -240,8 +240,16 @@ Bundled game data is **Freedoom** (three-clause BSD). Its `COPYING` and `CREDITS
 are packed next to the WADs deliberately: the licence requires them to travel
 with the binary, not merely sit in the repo.
 
-**`DOOM.WAD` and `DOOM2.WAD` are proprietary and are never bundled.** Players
-drop their own into `config/dbrdoom/wads/`.
+**One WAD, and only the bundled one.** `WadLocator` no longer scans the folder;
+it asks for `freedoom1.wad` by name, and `FreedoomInstaller.ensureInstalled`
+restores it when a `.freedoom-stamp` of its size and hash stops matching. A
+client on other data records runs that cannot be replayed, and a client on an
+edited copy records runs that replay into a game it did not play. The stamp is
+what makes the check cost a stat and a hash instead of decompressing the
+resource on every launch.
+
+**`DOOM.WAD` and `DOOM2.WAD` are proprietary and are never bundled**, and since
+the mod plays only its own Freedoom they cannot be used either.
 
 ## Open problems
 
@@ -302,7 +310,8 @@ drop their own into `config/dbrdoom/wads/`.
   measurement lied and cost a detour.
 - **The engine identifies an IWAD by its file name**, through a hardcoded enum in
   `defines/DoomVersion`. `freedoom1.wad` is recognised, `freedoom1-ep1.wad` is
-  not, and the game mode silently ends up null. Do not rename the bundled WAD.
+  not, and the game mode silently ends up null. Do not rename the bundled WAD;
+  `FreedoomInstaller.IWAD_NAME` is the single place that spells it.
   Game mode then decides the episode count, and no mode maps to a single
   episode, so `m/Menu` is patched to trim the list to episodes whose first map
   actually exists.

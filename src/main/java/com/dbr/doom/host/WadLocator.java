@@ -23,119 +23,48 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
 
 /**
- * Finds playable WADs in config/dbrdoom/wads.
+ * Finds the one WAD this mod plays.
  *
- * No WAD ships with this mod. DOOM.WAD and DOOM2.WAD are proprietary, so the
- * player supplies their own copy or uses Freedoom, which is freely licensed and
- * runs on the same engine.
+ * It used to list whatever was in config/dbrdoom/wads and take the first IWAD,
+ * so a player could drop in their own DOOM.WAD or an add-on. The mod now plays
+ * the Freedoom that ships in the jar and nothing else, and
+ * {@link FreedoomInstaller} puts it back if it is replaced.
+ *
+ * The reason is the rewards. A run is checked by replaying it on the server
+ * against the server's own copy of the data, so a client on different data
+ * records a run that cannot reproduce - and one on an edited copy, with weaker
+ * monsters or convenient ammo, records a run that reproduces into something it
+ * did not play. Anything else left in the folder is ignored, not deleted.
  */
 public final class WadLocator {
 
     /** A WAD's first four bytes say which kind it is. */
     private static final String MAGIC_IWAD = "IWAD";
-    private static final String MAGIC_PWAD = "PWAD";
 
     private WadLocator() {
     }
 
-    /** One WAD found on disk. */
-    public static final class Wad {
-
-        private final File file;
-        private final boolean iwad;
-
-        Wad(File file, boolean iwad) {
-            this.file = file;
-            this.iwad = iwad;
-        }
-
-        public File getFile() {
-            return file;
-        }
-
-        /** The name without its extension, which is what /DoomPlay matches on. */
-        public String getName() {
-            final String n = file.getName();
-            final int dot = n.lastIndexOf('.');
-            return dot > 0 ? n.substring(0, dot) : n;
-        }
-
-        /**
-         * True for a full game (an IWAD), false for an add-on (a PWAD).
-         * Only an IWAD can be launched on its own.
-         */
-        public boolean isIwad() {
-            return iwad;
-        }
-    }
-
     /**
-     * Lists every readable WAD in the directory, IWADs first and alphabetical
-     * within each group, so the default pick is stable between launches.
+     * The bundled IWAD, or null if it is missing or is not a WAD at all.
      *
-     * Files that are unreadable or are not WADs at all are skipped silently;
-     * players drop all sorts of things in these folders.
+     * The header is checked rather than the extension: handing a non-WAD to the
+     * engine crashes it deep inside the loader with an error that explains
+     * nothing.
      */
-    public static List<Wad> findAll(File wadDir) {
-        final List<Wad> found = new ArrayList<Wad>();
-
+    public static File bundledIwad(File wadDir) {
         if (wadDir == null || !wadDir.isDirectory()) {
-            return found;
+            return null;
         }
 
-        final File[] files = wadDir.listFiles();
-        if (files == null) {
-            return found;
+        final File wad = new File(wadDir, FreedoomInstaller.IWAD_NAME);
+        if (!wad.isFile() || !MAGIC_IWAD.equals(readMagic(wad))) {
+            return null;
         }
-
-        for (File f : files) {
-            if (!f.isFile() || !f.getName().toLowerCase().endsWith(".wad")) {
-                continue;
-            }
-
-            final String magic = readMagic(f);
-            if (MAGIC_IWAD.equals(magic)) {
-                found.add(new Wad(f, true));
-            } else if (MAGIC_PWAD.equals(magic)) {
-                found.add(new Wad(f, false));
-            }
-            // Anything else just is not a WAD, whatever its extension claims.
-        }
-
-        Collections.sort(found, new Comparator<Wad>() {
-            @Override
-            public int compare(Wad a, Wad b) {
-                if (a.isIwad() != b.isIwad()) {
-                    return a.isIwad() ? -1 : 1;
-                }
-                return a.getName().compareToIgnoreCase(b.getName());
-            }
-        });
-
-        return found;
+        return wad;
     }
 
-    /** The WAD /DoomPlay uses when given no argument, or null if there is none. */
-    public static Wad findDefaultIwad(File wadDir) {
-        for (Wad w : findAll(wadDir)) {
-            if (w.isIwad()) {
-                return w;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Reads the four-byte header. Trusting the extension is not enough: players
-     * rename things, and handing a non-WAD to the engine crashes it deep inside
-     * the loader with an error that explains nothing.
-     */
     private static String readMagic(File file) {
         InputStream in = null;
         try {

@@ -55,13 +55,17 @@ public class ClientProxy extends CommonProxy {
         EngineOutputRouter.install();
 
         try {
-            final int written = FreedoomInstaller.installIfMissing(DbrDoomMod.wadDir());
+            final int written = FreedoomInstaller.ensureInstalled(DbrDoomMod.wadDir());
             if (written > 0) {
                 DbrDoomMod.logger().info("Unpacked {} Freedoom files into {}",
                     Integer.valueOf(written), DbrDoomMod.wadDir().getAbsolutePath());
             }
         } catch (IOException e) {
-            // Not fatal: a player can still supply their own WAD.
+            /*
+             * Not fatal here, but there is no fallback any more: the mod plays
+             * the bundled WAD and nothing else, so a session will refuse to open
+             * until this succeeds.
+             */
             DbrDoomMod.logger().error("Could not unpack the bundled Freedoom data", e);
         }
     }
@@ -136,9 +140,11 @@ public class ClientProxy extends CommonProxy {
             return;
         }
 
-        final WadLocator.Wad wad = WadLocator.findDefaultIwad(DbrDoomMod.wadDir());
+        final File wad = WadLocator.bundledIwad(DbrDoomMod.wadDir());
         if (wad == null) {
-            say(EnumChatFormatting.RED + "No IWAD found in " + DbrDoomMod.wadDir().getAbsolutePath());
+            say(EnumChatFormatting.RED + "The Doom data is missing. Restart the game to unpack it again.");
+            DbrDoomMod.logger().error("No {} in {}",
+                new Object[] { "freedoom1.wad", DbrDoomMod.wadDir().getAbsolutePath() });
             releaseClaim(x, y, z);
             return;
         }
@@ -151,10 +157,10 @@ public class ClientProxy extends CommonProxy {
          * visible stall on the client thread. Nothing waits for it, and the
          * answer is cached, so it costs this once per launch.
          */
-        announceWad(wad.getFile());
+        announceWad(wad);
 
         try {
-            final DoomHost host = DoomHost.start(wad.getFile(), DbrDoomMod.baseDir());
+            final DoomHost host = DoomHost.start(wad, DbrDoomMod.baseDir());
             /*
              * The immersive screen paints nothing itself: the world stays
              * visible and the picture comes from the cabinet's renderer.

@@ -44,8 +44,16 @@ something you found rather than a second game bolted on.
 
 Freedoom is a free, openly licensed replacement for Doom's game data. It is not
 the original id Software artwork: `DOOM.WAD` and `DOOM2.WAD` are proprietary and
-are **never** bundled here. If you own a copy, drop it into
-`config/dbrdoom/wads/` and it will be found.
+are **never** bundled here.
+
+**This is the only WAD the mod plays.** Your own WADs are not loaded, and a
+`freedoom1.wad` that has been swapped for something else is restored on the next
+launch. That is not tidiness: rewards are paid by replaying your run on the
+server against the server's copy of the data, so a client playing something else
+records a run that cannot reproduce — and one playing an edited copy, with
+weaker monsters or ammo in convenient places, records a run that reproduces into
+a game it did not play. Anything else you leave in the folder is ignored, not
+deleted.
 
 Game data was around ninety percent of the download, so it is cut three ways: 27
 of Freedoom's 36 maps are dropped, then the textures, patches, flats and music
@@ -55,19 +63,15 @@ plain zip entry. Together that takes the jar from 23MB to about 5MB.
 The whole episode is kept rather than a few maps: map data compresses so well
 that cutting to three would have saved another 0.4MB and lost the ending.
 
-Want the rest? Download Freedoom from its own site and drop the WAD in the same
-folder; the mod finds whatever is there. `MODIFICATIONS-freedoom.txt`, unpacked
-next to the WAD, records exactly what was removed.
-
-Deleting a bundled WAD is fine. A marker file records that the unpack already
-happened, so nothing is restored behind your back on the next launch.
+`MODIFICATIONS-freedoom.txt`, unpacked next to the WAD, records exactly what was
+removed, as Freedoom's licence requires.
 
 ## Layout
 
 ```
 config/dbrdoom.cfg   <- this mod's settings
 config/dbrdoom/
-  wads/              <- Freedoom lands here; add your own .wad files too
+  wads/              <- the bundled Freedoom, checked on every launch
   saves/             <- Doom savegames
   default.cfg        <- Doom's own settings, written by its options menu
   mochadoom.cfg      <- engine settings
