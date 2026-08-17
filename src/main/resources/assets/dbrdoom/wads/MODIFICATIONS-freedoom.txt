@@ -4,14 +4,14 @@ Freedoom Phase 1 (0.13.0) ships 36 maps across four episodes, 28.8MB in all. The
 copy bundled with DbrDoomMod is 11.9MB and contains:
 
   * Episode 1 only, maps E1M1 to E1M9. The other 27 maps were removed.
-  * Only the artwork those maps use. 540 of the 963 texture definitions, 578 of
-    the 1049 texture patches and 94 flats were removed, along with the music of
+  * Only the artwork those maps use. 523 of the 963 texture definitions, 561 of
+    the 1049 texture patches and 66 flats were removed, along with the music of
     the deleted maps. The TEXTURE1, TEXTURE2 and PNAMES tables were rebuilt to
     match.
 
-Kept regardless of use: every sprite and sound, the switch and animated texture
-sets the engine looks up by name, and the sky. Removing any of those breaks the
-game rather than shrinking it.
+Kept regardless of use: every sprite and sound, the switch textures the engine
+looks up by name, the sky, and every frame of every animated texture and flat.
+Removing any of those breaks the game rather than shrinking it.
 
 Nothing was altered. Everything still present is bit for bit as Freedoom
 released it; the change is purely what was left out, so the mod's download is a
@@ -25,4 +25,5 @@ For the complete game, with all four episodes and their artwork, get it from the
 Freedoom project directly:
     https://freedoom.github.io/
 
-Drop any WAD into this folder and the mod will find it.
+The mod plays this WAD and only this WAD, by name, and restores it if it is
+replaced: a client on other data records games the server cannot check.

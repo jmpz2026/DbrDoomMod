@@ -15,9 +15,12 @@ asks for them by name:
 
   * Switch textures. P_InitSwitchList calls TextureNumForName, which errors
     rather than returning -1. A missing switch is a dead game.
-  * Animated texture and flat ranges. P_InitPicAnims does check first, but only
-    on the start name; it then takes the end name unchecked. Keep both or drop
-    both, so keep both.
+  * Animated texture and flat ranges. Not just the two names: P_InitPicAnims
+    takes the start and end and animates *everything between them, in WAD
+    order*. Keeping only the two ends leaves NUKAGE1 and NUKAGE3 animating as a
+    two frame loop with the middle gone - and if anything unrelated survives
+    between them, that gets animated as a frame of slime. So the whole range is
+    protected, expanded against the order in the WAD being pruned.
   * The sky. Chosen by episode number, not by anything in the map.
 
 Those lists are read out of the engine source rather than copied here, so they
@@ -53,7 +56,11 @@ def is_map_marker(name):
 
 
 def engine_protected_names(engine_dir):
-    """Switch and animation names, read straight from the engine source."""
+    """Switch and animation names, read straight from the engine source.
+
+    Returns the names to protect outright, and the animation ranges, which can
+    only be expanded once the WAD's own ordering is known.
+    """
     path = os.path.join(engine_dir, "p", "UnifiedGameMap.java")
     src = open(path, encoding="utf-8", newline="").read()
 
@@ -66,17 +73,42 @@ def engine_protected_names(engine_dir):
     for a, b in switches:
         textures.update(x.upper() for x in (a, b) if x)
 
-    for is_texture, end, start in anims:
-        target = textures if is_texture == "true" else flats
-        target.update(x.upper() for x in (end, start) if x)
+    ranges = [(is_texture == "true", start.upper(), end.upper())
+              for is_texture, end, start in anims if start and end]
 
     # Sky is picked by episode number and never appears in a sidedef.
     textures.update({"SKY1", "SKY2", "SKY3", "SKY4"})
     flats.add("F_SKY1")
 
-    print("protected: %d textures, %d flats (from the engine's own tables)"
-          % (len(textures), len(flats)))
-    return textures, flats
+    print("protected: %d textures, %d flats, %d animation ranges"
+          " (from the engine's own tables)" % (len(textures), len(flats), len(ranges)))
+    return textures, flats, ranges
+
+
+def expand_ranges(ranges, texture_order, flat_order):
+    """Every frame of every animation, in the order this WAD holds them.
+
+    P_InitPicAnims does not read a list of frames. It takes the number of the
+    start name and the number of the end name and animates everything between
+    them - textures by their number in TEXTURE1/TEXTURE2, flats by their lump
+    number. So protecting the two ends is not protecting the animation: it
+    leaves a four frame waterfall running two frames, and whatever else happens
+    to survive between them joins in.
+
+    Anything whose start is not in this WAD is skipped, exactly as the engine
+    skips it.
+    """
+    keep_tex, keep_flat = set(), set()
+    for is_texture, start, end in ranges:
+        order = texture_order if is_texture else flat_order
+        if start not in order or end not in order:
+            continue
+        a, b = order.index(start), order.index(end)
+        if b < a:
+            a, b = b, a
+        frames = order[a:b + 1]
+        (keep_tex if is_texture else keep_flat).update(frames)
+    return keep_tex, keep_flat
 
 
 def main():
@@ -99,7 +131,36 @@ def main():
     for name, pos, size in lumps:
         index.setdefault(name, (pos, size))
 
-    keep_tex, keep_flat = engine_protected_names(engine_dir)
+    keep_tex, keep_flat, anim_ranges = engine_protected_names(engine_dir)
+
+    # The order the engine will see: textures by table position, flats by lump.
+    texture_order = []
+    for lump in ("TEXTURE1", "TEXTURE2"):
+        if lump not in index:
+            continue
+        tpos, _ = index[lump]
+        tcount = struct.unpack_from("<i", data, tpos)[0]
+        for i in range(tcount):
+            off = struct.unpack_from("<i", data, tpos + 4 + i * 4)[0]
+            texture_order.append(
+                data[tpos + off:tpos + off + 8].rstrip(b"\0").decode("ascii", "replace").upper())
+
+    flat_order, in_flats = [], False
+    for name, pos, size in lumps:
+        if name in ("F_START", "FF_START", "F1_START", "F2_START", "F3_START"):
+            in_flats = True
+            continue
+        if name in ("F_END", "FF_END", "F1_END", "F2_END", "F3_END"):
+            in_flats = False
+            continue
+        if in_flats and size > 0:
+            flat_order.append(name)
+
+    anim_tex, anim_flat = expand_ranges(anim_ranges, texture_order, flat_order)
+    keep_tex |= anim_tex
+    keep_flat |= anim_flat
+    print("animations: %d texture frames, %d flat frames kept whole"
+          % (len(anim_tex), len(anim_flat)))
 
     # What the surviving maps actually reference.
     in_map = False
