@@ -62,7 +62,16 @@ TileEntityDoomArcadeRenderer   binds it and draws one quad per cabinet
 
 GuiDoom                  full screen; input, audio ducking, teardown
 GuiDoomImmersive         subclass that draws nothing so the world shows through
+
+RewardChannel            plugin messaging channel DBRDOOM, mod <-> Bukkit plugin
+  WadFingerprint         sha-256 of the WAD, sent with HELLO when a session starts
+RunUploader              queues a finished run, deflates it off thread, one
+                         chunk per client tick
 ```
+
+The cabinet has **no recipe**. It sits in the Redstone creative tab and an
+administrator places it with `/give`: an arcade is something somebody builds,
+not something every player makes in their base.
 
 One engine per client, enforced by a static singleton inside the engine. Every
 cabinet therefore shows the same game, which is why the texture upload is global
@@ -140,11 +149,18 @@ Minecraft 1.7.10, in rough order of how long they took:
 - **`Minecraft.func_152344_a`** has no MCP name in 1.7.10 mappings.
 - **Gradle 8 rejects the two-`from` `processResources` idiom** that older 1.7.10
   build scripts use. Use `filesMatching`.
-- **`reobf` dies with a bare `IllegalArgumentException`** if a third-party
-  library is inside the jar when it runs. SpecialSource cannot cope. Embedded
-  libraries are therefore injected by the `embedLibraries` task, which runs
-  *after* reobfuscation. This is also correct on its own terms: they contain no
-  Minecraft references, so there is nothing to remap.
+- **`reobf` dies with a bare `IllegalArgumentException`** on an embedded
+  library's `META-INF`. XZ is a multi-release jar and carries
+  `META-INF/versions/9/module-info.class`; the ASM inside SpecialSource cannot
+  read a Java 9 class file, and FML's mod scanner trips over the same entry. The
+  `jar` block therefore embeds `configurations.embed` and excludes
+  `META-INF/**`. The classes themselves are ordinary Java 7 and remap
+  harmlessly.
+- **An embedded library can go missing without failing the build.** An earlier
+  version used Ant's zip in update mode, which copies nothing older than the
+  archive - the library is from 2021, so a clean build silently shipped without
+  it and only broke on a fresh install. `verifyJar` runs after `reobf` and looks
+  for `org/tukaani/xz/XZInputStream.class` in the finished jar.
 - **`compile.extendsFrom` no longer feeds the compile classpath** on Gradle 8.
   The dependency resolves and downloads, then the compile fails on a missing
   package. Extend `implementation`.
@@ -155,6 +171,14 @@ Rewards are paid on a **replay of the run**, never on anything the client says
 about itself. The client records a demo, the server replays it and pays for what
 comes out. `com.dbr.doom.verify.RunVerifier` is the replay half;
 `tools/spike/README.md` is the evidence that this works at all.
+
+**The wire is in `docs/rewards-protocol.md`, and that is the file to change with
+it.** Mod and plugin share no classes, only hand-copied constants, so the
+protocol only exists as that document: channel `DBRDOOM`, protocol version 3,
+`HELLO` / `RUN_BEGIN` / `RUN_CHUNK` / `RUN_END` out, `CAPS` / `MESSAGE` back.
+Rewards ride a plugin messaging channel rather than `DoomNetwork` because the
+Bukkit plugin cannot see a Forge `SimpleNetworkWrapper` message at all. Every
+send is best-effort; the mod plays normally with nothing listening.
 
 - **Replay is deterministic, and that is measured, not assumed.** 32 replays
   across two session lengths came out identical byte for byte and matched the
