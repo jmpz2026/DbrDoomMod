@@ -72,10 +72,21 @@ removed, as Freedoom's licence requires.
 config/dbrdoom.cfg   <- this mod's settings
 config/dbrdoom/
   wads/              <- the bundled Freedoom, checked on every launch
-  saves/             <- Doom savegames
+  saves/             <- Doom savegames (see below)
   default.cfg        <- Doom's own settings, written by its options menu
   mochadoom.cfg      <- engine settings
 ```
+
+### Saving and loading
+
+Doom's own save menu works, six slots, in `config/dbrdoom/saves/`. They are your
+files and never leave your machine.
+
+One thing worth knowing if the server pays for playing: **loading a save stops
+the recording**. What you played up to that point still counts and is handed in
+as normal, but nothing after the load is recorded, because a run that continues
+past a load cannot be replayed — the server would be re-running your keypresses
+against a game your savegame never touched. Start a new game to record again.
 
 ## Configuration
 

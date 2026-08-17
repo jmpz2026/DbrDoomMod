@@ -1989,7 +1989,14 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
             gamemap = header.getGamemap();
             System.arraycopy(header.getPlayeringame(), 0, playeringame, 0, MAXPLAYERS);
 
-            // load a base level 
+            /*
+             * DbrDoomMod: the world is about to be replaced by one that no
+             * replay can rebuild, so the recording stops here. See
+             * dbrEndRunForLoad().
+             */
+            dbrEndRunForLoad();
+
+            // load a base level
             G_InitNew: {
                 InitNew(gameskill, gameepisode, gamemap);
             }
@@ -2355,6 +2362,32 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
         demobuffer = new VanillaDoomDemo();
         demorecording = true;
         BeginRecording();
+    }
+
+    /**
+     * DbrDoomMod: stops recording because a savegame is being loaded.
+     *
+     * Loading does not start a recording - that only happens in DoNewGame - but
+     * until this existed it did not stop one either, and demorecording stayed
+     * true across the load. The tics kept accumulating while the world they
+     * describe was replaced by one no replay can rebuild: a replay starts the
+     * level fresh and applies the tics to a game the savegame never touched.
+     *
+     * The prefix recorded up to this point is honest and replays correctly, so
+     * it is handed up to be paid for rather than thrown away. Recording then
+     * stays off until the player starts a new game, because nothing after a load
+     * can be reproduced.
+     */
+    private void dbrEndRunForLoad() {
+        if (!demorecording) {
+            return;
+        }
+
+        final byte[] demo = dbrSerialiseRun();
+        demorecording = false;
+        if (demo != null) {
+            dbrPendingRun = demo;
+        }
     }
 
     /**

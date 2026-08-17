@@ -1,6 +1,6 @@
 diff -ruN a/data/dstrings.java b/data/dstrings.java
---- a/data/dstrings.java	2026-08-16 20:20:01.126036300 -0500
-+++ b/data/dstrings.java	2026-08-16 20:20:01.656643600 -0500
+--- a/data/dstrings.java	2026-08-17 08:27:59.900953500 -0500
++++ b/data/dstrings.java	2026-08-17 08:26:47.608093700 -0500
 @@ -57,7 +57,13 @@
  
  
@@ -17,8 +17,8 @@ diff -ruN a/data/dstrings.java b/data/dstrings.java
      /** File locations,  relative to current position.
       * Path names are OS-sensitive. 
 diff -ruN a/doom/ConfigBase.java b/doom/ConfigBase.java
---- a/doom/ConfigBase.java	2026-08-16 20:20:01.191926000 -0500
-+++ b/doom/ConfigBase.java	2026-08-16 20:20:01.815383200 -0500
+--- a/doom/ConfigBase.java	2026-08-17 08:27:59.981547000 -0500
++++ b/doom/ConfigBase.java	2026-08-17 08:26:47.699820700 -0500
 @@ -61,6 +61,16 @@
      public static class Files {
          private static String folder;
@@ -37,8 +37,8 @@ diff -ruN a/doom/ConfigBase.java b/doom/ConfigBase.java
          public final String fileName;
          public boolean changed = true;
 diff -ruN a/doom/DoomMain.java b/doom/DoomMain.java
---- a/doom/DoomMain.java	2026-08-16 20:20:01.178936100 -0500
-+++ b/doom/DoomMain.java	2026-08-16 20:20:01.839879800 -0500
+--- a/doom/DoomMain.java	2026-08-17 08:27:59.974851100 -0500
++++ b/doom/DoomMain.java	2026-08-17 08:26:47.691595300 -0500
 @@ -39,6 +39,7 @@
  import com.dbr.doom.engine.i.Strings;
  import java.awt.Rectangle;
@@ -122,7 +122,23 @@ diff -ruN a/doom/DoomMain.java b/doom/DoomMain.java
  
  
      /**
-@@ -2100,8 +2138,17 @@
+@@ -1951,7 +1989,14 @@
+             gamemap = header.getGamemap();
+             System.arraycopy(header.getPlayeringame(), 0, playeringame, 0, MAXPLAYERS);
+ 
+-            // load a base level 
++            /*
++             * DbrDoomMod: the world is about to be replaced by one that no
++             * replay can rebuild, so the recording stops here. See
++             * dbrEndRunForLoad().
++             */
++            dbrEndRunForLoad();
++
++            // load a base level
+             G_InitNew: {
+                 InitNew(gameskill, gameepisode, gamemap);
+             }
+@@ -2100,8 +2145,17 @@
          G_InitNew: {
              InitNew(d_skill, d_episode, d_map);
          }
@@ -141,7 +157,7 @@ diff -ruN a/doom/DoomMain.java b/doom/DoomMain.java
  
      /**
       * G_InitNew
-@@ -2238,7 +2285,138 @@
+@@ -2238,7 +2292,164 @@
                  levelLoadFailure();
              }
          }
@@ -219,6 +235,32 @@ diff -ruN a/doom/DoomMain.java b/doom/DoomMain.java
 +    }
 +
 +    /**
++     * DbrDoomMod: stops recording because a savegame is being loaded.
++     *
++     * Loading does not start a recording - that only happens in DoNewGame - but
++     * until this existed it did not stop one either, and demorecording stayed
++     * true across the load. The tics kept accumulating while the world they
++     * describe was replaced by one no replay can rebuild: a replay starts the
++     * level fresh and applies the tics to a game the savegame never touched.
++     *
++     * The prefix recorded up to this point is honest and replays correctly, so
++     * it is handed up to be paid for rather than thrown away. Recording then
++     * stays off until the player starts a new game, because nothing after a load
++     * can be reproduced.
++     */
++    private void dbrEndRunForLoad() {
++        if (!demorecording) {
++            return;
++        }
++
++        final byte[] demo = dbrSerialiseRun();
++        demorecording = false;
++        if (demo != null) {
++            dbrPendingRun = demo;
++        }
++    }
++
++    /**
 +     * DbrDoomMod: ends the recording and returns the demo, or null if nothing
 +     * was being recorded.
 +     *
@@ -281,7 +323,7 @@ diff -ruN a/doom/DoomMain.java b/doom/DoomMain.java
  
      protected void levelLoadFailure() {
          boolean endgame = doomSystem.GenerateAlert(Strings.LEVEL_FAILURE_TITLE, Strings.LEVEL_FAILURE_CAUSE);
-@@ -2458,11 +2636,24 @@
+@@ -2458,11 +2669,24 @@
              return true; 
          } 
  
@@ -302,15 +344,15 @@ diff -ruN a/doom/DoomMain.java b/doom/DoomMain.java
 +                demorecording = false;
 +                return false;
 +            }
-+
-+            //demobuffer[demo_p++] = (byte) DEMOMARKER;
  
 -            MenuMisc.WriteFile(demoname, demobuffer); 
++            //demobuffer[demo_p++] = (byte) DEMOMARKER;
++
 +            MenuMisc.WriteFile(demoname, demobuffer);
              //Z_Free (demobuffer); 
              demorecording = false; 
              doomSystem.Error ("Demo %s recorded",demoname); 
-@@ -2690,6 +2881,15 @@
+@@ -2690,6 +2914,15 @@
      }
      
      public void setupLoop() throws IOException {
@@ -326,7 +368,7 @@ diff -ruN a/doom/DoomMain.java b/doom/DoomMain.java
          // check for a driver that wants intermission stats
          cVarManager.with(CommandVariable.STATCOPY, 0, (String s) -> {
              // TODO: this should be chained to a logger
-@@ -2730,8 +2930,6 @@
+@@ -2730,8 +2963,6 @@
                  }
              }
          }
@@ -335,7 +377,7 @@ diff -ruN a/doom/DoomMain.java b/doom/DoomMain.java
      }
  
      private void printGameInfo() {
-@@ -3743,6 +3941,19 @@
+@@ -3743,6 +3974,19 @@
  
          // wait for new tics if needed
          while (lowtic < gametic / ticdup + counts) {
@@ -356,8 +398,8 @@ diff -ruN a/doom/DoomMain.java b/doom/DoomMain.java
              lowtic = MAXINT;
  
 diff -ruN a/m/Menu.java b/m/Menu.java
---- a/m/Menu.java	2026-08-16 20:20:01.402089800 -0500
-+++ b/m/Menu.java	2026-08-16 20:20:01.898388600 -0500
+--- a/m/Menu.java	2026-08-17 08:27:59.823419600 -0500
++++ b/m/Menu.java	2026-08-17 08:26:47.449587400 -0500
 @@ -1412,6 +1412,20 @@
              break;
          }
@@ -380,8 +422,8 @@ diff -ruN a/m/Menu.java b/m/Menu.java
  
      
 diff -ruN a/mochadoom/Engine.java b/mochadoom/Engine.java
---- a/mochadoom/Engine.java	2026-08-16 20:20:01.267039900 -0500
-+++ b/mochadoom/Engine.java	2026-08-16 20:20:01.856399000 -0500
+--- a/mochadoom/Engine.java	2026-08-17 08:27:59.882437300 -0500
++++ b/mochadoom/Engine.java	2026-08-17 08:26:47.576236500 -0500
 @@ -35,7 +35,27 @@
  
  public class Engine {
@@ -485,8 +527,8 @@ diff -ruN a/mochadoom/Engine.java b/mochadoom/Engine.java
          
      public String getWindowTitle(double frames) {
 diff -ruN a/s/ClipSFXModule.java b/s/ClipSFXModule.java
---- a/s/ClipSFXModule.java	2026-08-16 20:20:01.442519500 -0500
-+++ b/s/ClipSFXModule.java	2026-08-16 20:20:01.879245100 -0500
+--- a/s/ClipSFXModule.java	2026-08-17 08:27:59.583123100 -0500
++++ b/s/ClipSFXModule.java	2026-08-17 08:26:47.349295500 -0500
 @@ -182,11 +182,27 @@
  		  //fprintf( stderr, "I_ShutdownSound: NOT finishing pending sounds\n");
  		  //fflush( stderr );
@@ -516,8 +558,8 @@ diff -ruN a/s/ClipSFXModule.java b/s/ClipSFXModule.java
  		  
  		  for( i=0 ; i<numChannels; i++){
 diff -ruN a/utils/C2JUtils.java b/utils/C2JUtils.java
---- a/utils/C2JUtils.java	2026-08-16 20:20:01.279446800 -0500
-+++ b/utils/C2JUtils.java	2026-08-16 20:20:01.778757600 -0500
+--- a/utils/C2JUtils.java	2026-08-17 08:27:59.628772700 -0500
++++ b/utils/C2JUtils.java	2026-08-17 08:26:47.213122700 -0500
 @@ -773,10 +773,11 @@
                  + " objects of class " + c.getName() + "!");
              throw new com.dbr.doom.host.DoomExitException(-1);

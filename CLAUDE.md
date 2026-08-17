@@ -186,6 +186,14 @@ comes out. `com.dbr.doom.verify.RunVerifier` is the replay half;
   reproduce** - a replay starts the level fresh and applies the tics to a world
   that never had the savegame in it. It is also the obvious exploit: save in
   front of a boss, load, kill it, repeat.
+- **Loading also has to *stop* a recording.** Not starting one was only half of
+  it: `demorecording` stayed true across a load, so the tics kept accumulating
+  while the world they describe was swapped for one no replay can rebuild. The
+  demo desynchronised from that point on, which mostly cost the player their
+  rewards and occasionally paid for something they had not done.
+  `dbrEndRunForLoad()` closes the recording just before `DoLoadGame` reaches
+  `InitNew` and hands the prefix up to be paid, since everything up to the load
+  does replay correctly. Recording stays off until the next `DoNewGame`.
 - **A run started by `dbrStartRun()` has a null `demoname`, and
   `CheckDemoStatus` has to check for it.** Without that the engine writes to a
   null path, fails, and reports the failure through `I_Error` - which is a
