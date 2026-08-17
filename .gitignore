@@ -22,3 +22,7 @@ tools/spike/out/
 tools/spike/work/
 tools/spike/rtwork/
 tools/spike/vwork/
+tools/spike/segwork/
+
+# Cache de los scripts de tools/.
+tools/__pycache__/

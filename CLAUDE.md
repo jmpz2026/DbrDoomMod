@@ -167,7 +167,10 @@ comes out. `com.dbr.doom.verify.RunVerifier` is the replay half;
   impossible.
 - **The plugin loads it through a `URLClassLoader` with a null parent.** That
   works because `com.dbr.doom.engine.**` references nothing outside itself but
-  `DoomExitException`, and `com.dbr.doom.verify` adds only the JDK. Everything
+  `DoomExitException` and `RunFormat`, and `com.dbr.doom.verify` adds only the
+  JDK. Both exceptions live in `com.dbr.doom.host` and use nothing but the JDK
+  themselves; anything they reached for would have to load in that classloader
+  too. Everything
   crossing the boundary is a String or a `byte[]`, which are bootstrap types.
   A fresh classloader also means a fresh `Engine.instance`, so the engine's
   singleton stops being an obstacle and becomes the isolation mechanism:
@@ -178,6 +181,41 @@ comes out. `com.dbr.doom.verify.RunVerifier` is the replay half;
   permanently. Filter by thread name instead, the way `EngineOutputRouter`
   already does; `RunVerifier` renames its thread to `DbrDoom-Verify` for exactly
   this.
+- **A run is one map, and what a demo cannot say travels beside it.** A demo
+  header holds the map and the skill, so a replay starts the level fresh with a
+  pistol - which is why a run used to be recorded once from the start of the
+  playthrough and uploaded again as a longer prefix per map. That is correct and
+  quadratic: nine maps meant replaying the first one nine times, about 69
+  seconds of server CPU, and the cost grew *during* a sitting.
+
+  `com.dbr.doom.host.RunFormat` wraps the demo with the state the segment began
+  with, and `DoomMain.dbrCaptureCarriedState` decides what that is. Exactly two
+  things differ between "the engine loaded the next map" and "the engine started
+  this map for a replay", and both are in there:
+
+  - **`G_PlayerReborn`**, which a replay runs because `InitNew` marks every
+    player `PST_REBORN`. So the inventory travels, and the state is applied
+    *before* `P_SetupLevel` with `playerstate` set to `PST_LIVE` - after it, the
+    weapon sprites are already raised from a pistol the player did not have.
+  - **`M_ClearRandom`**, which `InitNew` calls and a level transition does not.
+    The random index carries across a map in real play; a replay starting from
+    zero has the first monster to act roll a different number.
+
+  **A player who reached the exit dead is the case that is not carried.**
+  `DoLoadLevel` turns `PST_DEAD` into `PST_REBORN` and the next map starts them
+  at a hundred health, so the state records a flag and the replay lets the
+  reborn happen. Restoring the corpse instead started map two with a dead player:
+  2096 tics compared, 2096 of them different. That is what `tools/spike`'s
+  `SegmentSpike` is for, and it is the only reason it was caught.
+
+- **Measured, not argued:** 896 and 2096 tic segments, replayed 2 to 6 times
+  each, agreeing with the recording on every aligned tic - position, angle,
+  health, ammo, kills - with a real carried state in both (76 health and 24
+  rounds in one, a death at the exit in the other). The first tics of a
+  recording are not in the comparison, because a live engine runs tics in
+  batches inside one frame while a `-timedemo` replay runs exactly one. A desync
+  does not heal, so a wrong first tic still shows up in every tic after it.
+
 - **Recording hooks `DoNewGame`, not `InitNew`.** `InitNew` has two other
   callers and neither may be recorded. `DoPlayDemo` uses it for the attract-mode
   demos on the title screen, which produced a demo of the engine playing itself
@@ -206,6 +244,12 @@ comes out. `com.dbr.doom.verify.RunVerifier` is the replay half;
   Corrupt uploads, demos from another engine version and demos for maps this WAD
   no longer has all look identical otherwise, and all of them are worth knowing
   about.
+- **Refusing an upload is no longer free.** Prefixes meant a dropped upload was
+  contained in the next one, so the plugin refused a second run from the same
+  player outright. Segments do not contain each other: a refused one is a map
+  nobody is ever paid for. The verifier pool now admits three per player and
+  serialises them on a per-player monitor.
+
 - **A finished run outlives the session that made it, so its queue is static.**
   The most valuable run of all - everything the player did before leaving - is
   only collected as the Doom thread winds down, which is *after* `stop()`. By
@@ -250,7 +294,19 @@ with the binary, not merely sit in the repo.
 
 **One WAD, and only the bundled one.** `WadLocator` no longer scans the folder;
 it asks for `freedoom1.wad` by name, and `FreedoomInstaller.ensureInstalled`
-restores it when a `.freedoom-stamp` of its size and hash stops matching. A
+restores it when a `.freedoom-stamp` of its size and hash stops matching.
+
+**The stamp has to identify the jar it came out of, not only the file it
+wrote.** Size and hash answer "has anybody touched this since we unpacked it",
+which is a different question from "is this the WAD this build ships". A client
+that updated to a jar with a new WAD kept the old one for ever: the file matched
+its own stamp perfectly, so nothing ever looked at the jar again. The symptom is
+the server refusing to pay with "your WAD is not one the server can verify",
+which reads like a client problem and is not. The third stamp field is the size
+and CRC of the packed resource, taken from the jar's own directory entry, so it
+costs no reading at all; a two-field stamp is treated as stale. The licence and
+credits are re-extracted whenever the WAD is, because
+`MODIFICATIONS-freedoom.txt` describes the binary it travels with. A
 client on other data records runs that cannot be replayed, and a client on an
 edited copy records runs that replay into a game it did not play. The stamp is
 what makes the check cost a stat and a hash instead of decompressing the
@@ -291,8 +347,20 @@ the mod plays only its own Freedoom they cannot be used either.
   silently puts the wrong artwork on the wrong walls. It reads the switch and
   animation tables out of the engine source, because `P_InitSwitchList` resolves
   those by name with `TextureNumForName`, which errors rather than returning -1.
-  Always validate a pruned WAD before shipping: a missing patch kills the engine,
-  a misnumbered one corrupts silently. Anything ending in `.xz` under
+  **An animation is a range, not two names.** `P_InitPicAnims` takes the start
+  and the end and animates everything between them *in WAD order*, so protecting
+  only the two ends shipped every animated flat and texture in the game running
+  on two frames - a four frame waterfall down to two, NUKAGE with its middle
+  gone - and risked an unrelated survivor in between being animated as a frame
+  of slime. `prune-wad.py` now expands each range against the WAD it is cutting.
+  Found from a player's screenshot, not from the code.
+
+  Always validate a pruned WAD before shipping, with `tools/check-wad.py`. It
+  checks the quiet failures: bare texture columns, patch indices outside PNAMES,
+  assets the surviving maps still reference, whole animation ranges, and every
+  kept lump bit for bit against the WAD it was cut from. A missing patch kills
+  the engine on the first wall that needs it; a misnumbered or half-kept one
+  corrupts silently, on some map nobody tested. Anything ending in `.xz` under
   `src/main/resources/assets/dbrdoom/wads/` is decompressed on unpack and the
   suffix stripped. `xz -9e` measured slightly *worse* than `-9` here.
   Cutting below a full episode is not worth it: three maps rather than nine saved
