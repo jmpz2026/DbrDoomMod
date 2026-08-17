@@ -75,6 +75,26 @@ class JavaRandom implements IRandom {
         return rndindex;
     }
 
+    /**
+     * DbrDoomMod: see IRandom.dbrIndices.
+     *
+     * The counters are here, but the streams behind them are java.util.Random
+     * and cannot be wound to a position, so putting these back does not restore
+     * the sequence. That is not a gap: a run is only ever recorded and replayed
+     * on DoomRandom, which InitNew selects whenever -javarandom is absent, and
+     * a JavaRandom demo is not vanilla-compatible in the first place.
+     */
+    @Override
+    public int[] dbrIndices() {
+        return new int[] { prndindex, rndindex };
+    }
+
+    @Override
+    public void dbrSetIndices(int prndindex, int rndindex) {
+        this.prndindex = prndindex;
+        this.rndindex = rndindex;
+    }
+
     private final Random r;
     private final Random m;
 

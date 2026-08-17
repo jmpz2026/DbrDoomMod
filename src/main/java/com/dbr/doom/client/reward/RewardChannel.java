@@ -63,7 +63,7 @@ public final class RewardChannel {
     public static final String CHANNEL = "DBRDOOM";
 
     /** Bumped when the wire format changes, so a stale plugin can say so. */
-    public static final int PROTOCOL_VERSION = 2;
+    public static final int PROTOCOL_VERSION = 3;
 
     // Client -> plugin.
     public static final byte C2S_HELLO = 0x20;
@@ -128,19 +128,23 @@ public final class RewardChannel {
     /**
      * Announces a run that is about to be uploaded, and how big it is.
      *
-     * @param serial which playthrough this is a prefix of. A run is uploaded
-     *               again every time a map is finished, each upload longer than
-     *               the last, so the server needs this to tell "they played on"
-     *               from "they started a new game"
+     * @param serial  which playthrough this belongs to. Starting a new game
+     *                bumps it, and the segments start over from zero
+     * @param segment which map of that playthrough this is, counting from zero.
+     *                Segments are disjoint and consecutive: the server adds them
+     *                up rather than working out what grew, which is what runs
+     *                used to require when every upload was a longer prefix of
+     *                the same recording
      */
-    public static void sendRunBegin(
-            long runId, int serial, int compressedLength, int chunks, int rawLength) {
+    public static void sendRunBegin(long runId, int serial, int segment,
+            int compressedLength, int chunks, int rawLength) {
         final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         final DataOutputStream out = new DataOutputStream(bytes);
         try {
             out.writeByte(C2S_RUN_BEGIN);
             out.writeLong(runId);
             out.writeInt(serial);
+            out.writeInt(segment);
             out.writeInt(compressedLength);
             out.writeInt(chunks);
             out.writeInt(rawLength);

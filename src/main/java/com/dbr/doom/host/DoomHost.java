@@ -108,25 +108,37 @@ public final class DoomHost {
     private static final Queue<Run> COMPLETED_RUNS = new ConcurrentLinkedQueue<Run>();
 
     /**
-     * One upload: the demo, and which playthrough it belongs to.
+     * One upload: a demo of one map, and where in a playthrough it sits.
      *
-     * A run is uploaded more than once - once per map finished, so the player is
-     * paid without leaving the cabinet - and each upload is a longer prefix of
-     * the same recording. The serial is what lets the server tell those apart
-     * from a fresh playthrough, whose tics start over from zero.
+     * A run is handed up once per map finished, so the player is paid without
+     * leaving the cabinet, and each one covers a different map: the serial says
+     * which playthrough, the segment which map of it.
+     *
+     * Both are read out of the run itself rather than asked of the engine.
+     * By the time the client thread collects a finished segment the engine has
+     * usually started the next one, so asking it would label a map with the
+     * number of the map after it.
+     *
+     * @see com.dbr.doom.host.RunFormat
      */
     public static final class Run {
 
         private final int serial;
+        private final int segment;
         private final byte[] data;
 
-        Run(int serial, byte[] data) {
+        Run(int serial, int segment, byte[] data) {
             this.serial = serial;
+            this.segment = segment;
             this.data = data;
         }
 
         public int getSerial() {
             return serial;
+        }
+
+        public int getSegment() {
+            return segment;
         }
 
         public byte[] getData() {
@@ -378,7 +390,7 @@ public final class DoomHost {
 
         final byte[] run = local.dbrTakePendingRun();
         if (run != null) {
-            offerRun(local.dbrRunSerial(), run);
+            offerRun(run);
         }
     }
 
@@ -396,7 +408,7 @@ public final class DoomHost {
 
             final byte[] run = local.dbrFinishRun();
             if (run != null) {
-                offerRun(local.dbrRunSerial(), run);
+                offerRun(run);
             }
         } catch (Throwable t) {
             // A run that cannot be collected is a lost reward, never a crash.
@@ -404,7 +416,18 @@ public final class DoomHost {
         }
     }
 
-    private static void offerRun(int serial, byte[] run) {
+    private static void offerRun(byte[] run) {
+        /*
+         * Which playthrough and which map, taken from the run itself. See
+         * Run for why the engine is not asked.
+         */
+        final RunFormat.Run decoded = RunFormat.decode(run);
+        if (decoded == null) {
+            DbrDoomMod.logger().warn("Discarding a Doom run the engine wrote in a format"
+                + " this build does not recognise");
+            return;
+        }
+
         /*
          * A player who never stops playing would otherwise grow this without
          * limit. The client thread drains it every tick, so reaching this means
@@ -417,9 +440,14 @@ public final class DoomHost {
                 Integer.valueOf(MAX_PENDING_RUNS));
         }
 
-        COMPLETED_RUNS.add(new Run(serial, run));
-        DbrDoomMod.logger().info("Recorded a Doom run of {} bytes (playthrough {})",
-            new Object[] { Integer.valueOf(run.length), Integer.valueOf(serial) });
+        COMPLETED_RUNS.add(new Run(decoded.serial(), decoded.segment(), run));
+        DbrDoomMod.logger().info(
+            "Recorded a Doom run of {} bytes (playthrough {}, map {})",
+            new Object[] {
+                Integer.valueOf(run.length),
+                Integer.valueOf(decoded.serial()),
+                Integer.valueOf(decoded.segment())
+            });
     }
 
     /**

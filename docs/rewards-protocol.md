@@ -20,7 +20,7 @@ listening.
 
 ## Registration
 
-Channel name `DBRDOOM`, protocol version `1`.
+Channel name `DBRDOOM`, protocol version `3`.
 
 The plugin learns a client has the mod from `PlayerRegisterChannelEvent`, the
 same way `DbrPetsPlugin` does — the mod registers the channel at startup whether
@@ -34,7 +34,7 @@ order: big endian, `writeUTF` for strings.
 | Type | Name | Payload |
 |------|------|---------|
 | `0x20` | `HELLO` | `int` protocol, `UTF` mod version, `UTF` wad sha-256 |
-| `0x21` | `RUN_BEGIN` | `long` runId, `int` compressedLength, `int` chunks, `int` rawLength |
+| `0x21` | `RUN_BEGIN` | `long` runId, `int` serial, `int` segment, `int` compressedLength, `int` chunks, `int` rawLength |
 | `0x22` | `RUN_CHUNK` | `long` runId, `int` index, `int` length, `length` bytes |
 | `0x23` | `RUN_END` | `long` runId |
 
@@ -44,6 +44,13 @@ the server also has can be paid**, since paying means replaying.
 
 `runId` is per client and increments from 1 per Minecraft launch. It is not
 unique across players — key by `(uuid, runId)`.
+
+`serial` is the playthrough and `segment` is which map of it, from 0. **Segments
+are disjoint and consecutive**, so a server adds them up. They used to be
+prefixes — every upload the whole recording so far — and the accounting that
+went with that was high-water marks per playthrough. Both numbers are also
+inside the payload; they are on the wire because the clock has to be checked
+before anything is decompressed.
 
 ## Plugin to client
 
@@ -57,8 +64,18 @@ can talk to an older mod.
 
 ## The payload
 
-A run is a vanilla Doom demo: a 13 byte header, then four bytes per tic, then an
-end marker. Doom runs at 35 tics a second, so ten minutes of play is about 84KB.
+A run is a vanilla Doom demo — a 13 byte header, then four bytes per tic, then
+an end marker — inside an envelope that carries what the demo cannot say.
+
+A demo replays from a level start with a pistol, and the second map of a
+playthrough is entered carrying the first one's weapons, ammo, health and random
+index. So the envelope holds that state, the verifier installs it before the
+level is built, and a run covers one map instead of everything so far. See
+`com.dbr.doom.host.RunFormat` for the layout and the reasoning; nothing between
+here and the verifier interprets the state, so adding a field to it changes
+nothing on the wire.
+
+Doom runs at 35 tics a second, so a ten minute map is about 84KB.
 
 Before sending, the client:
 
@@ -176,6 +193,10 @@ a client producing them is either broken or trying something.
 
 The replay settles what happened, but not *when*, so the plugin still has to:
 
+- **Refuse a segment that has already been paid for**, by `(serial, segment)`,
+  before the ledger is even asked. The hash catches a resend for good; this
+  catches it for free, and without it two copies arriving together are two
+  payments.
 - **Keep a ledger of demo hashes.** SHA-256 the demo, persist it, never pay
   twice for the same one. The ledger is written after the replay and read before
   it, so also hold the hash for the duration, or two copies of one demo arriving
@@ -204,6 +225,13 @@ The replay settles what happened, but not *when*, so the plugin still has to:
   the same data the replay cannot reproduce the session. "No allowlist configured"
   must mean nothing is paid: a desynchronised replay does not reliably stop, it
   reports what the wrong monsters in the wrong places did.
+
+  The allowlist need not be configured at all, though. The server holds the WAD
+  it replays against, so it can hash that and accept it — which is by
+  construction the only data a run can be checked with. `DbrDoomPlugin` does
+  this at startup and keeps the configured list as an override; asking an
+  administrator to paste sixty-four characters was its most expensive setup
+  step and its quietest failure.
 
 ## Exercised on a live server
 

@@ -104,17 +104,19 @@ public final class RunUploader {
     private static final class Upload {
 
         private final long id;
-        /** Which playthrough this is a prefix of. See DoomHost.Run. */
+        /** Which playthrough and which map of it. See DoomHost.Run. */
         private final int serial;
+        private final int segment;
         private final byte[] data;
         private final int rawLength;
         private final int chunks;
         private int sent;
         private boolean announced;
 
-        Upload(long id, int serial, byte[] data, int rawLength) {
+        Upload(long id, int serial, int segment, byte[] data, int rawLength) {
             this.id = id;
             this.serial = serial;
+            this.segment = segment;
             this.data = data;
             this.rawLength = rawLength;
             this.chunks = (data.length + RewardChannel.MAX_CHUNK - 1) / RewardChannel.MAX_CHUNK;
@@ -144,7 +146,7 @@ public final class RunUploader {
     private static void collect() {
         DoomHost.Run run;
         while ((run = DoomHost.pollCompletedRun()) != null) {
-            queue(run.getSerial(), run.getData());
+            queue(run.getSerial(), run.getSegment(), run.getData());
         }
     }
 
@@ -152,7 +154,7 @@ public final class RunUploader {
      * Queues a run. Public because the session teardown path has to hand over
      * the last one after the host is already gone.
      */
-    public static void queue(final int serial, final byte[] run) {
+    public static void queue(final int serial, final int segment, final byte[] run) {
         if (run == null || run.length == 0) {
             return;
         }
@@ -189,13 +191,15 @@ public final class RunUploader {
                         return;
                     }
 
-                    PENDING.add(new Upload(id, serial, compressed, run.length));
+                    PENDING.add(new Upload(id, serial, segment, compressed, run.length));
                     DbrDoomMod.logger().info(
-                        "Queued a Doom run: {} bytes, {} compressed (playthrough {})",
+                        "Queued a Doom run: {} bytes, {} compressed"
+                            + " (playthrough {}, map {})",
                         new Object[] {
                             Integer.valueOf(run.length),
                             Integer.valueOf(compressed.length),
-                            Integer.valueOf(serial)
+                            Integer.valueOf(serial),
+                            Integer.valueOf(segment)
                         });
                 } finally {
                     COMPRESSING.decrementAndGet();
@@ -230,7 +234,7 @@ public final class RunUploader {
             }
 
             if (!current.announced) {
-                RewardChannel.sendRunBegin(current.id, current.serial,
+                RewardChannel.sendRunBegin(current.id, current.serial, current.segment,
                     current.data.length, current.chunks, current.rawLength);
                 current.announced = true;
                 // The announcement is this tick's send; the first chunk is next.

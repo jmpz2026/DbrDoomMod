@@ -1179,6 +1179,17 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
             memset(players[i].frags, 0, players[i].frags.length);
         }
 
+        /*
+         * DbrDoomMod: puts back what a continued segment was carrying.
+         *
+         * Before the level is built, so that P_SpawnPlayer sees a player who is
+         * alive and already equipped and skips G_PlayerReborn entirely - which
+         * is what the real transition between two maps does. Applying it
+         * afterwards would leave the weapon sprites raised from a pistol the
+         * player did not have.
+         */
+        dbrApplyStartState();
+
         try {
             P_SetupLevel: {
                 levelLoader.SetupLevel(gameepisode, gamemap, 0, gameskill);
@@ -1883,21 +1894,27 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
         }
 
         /*
-         * DbrDoomMod: the player finished a map, so hand up what has been
-         * recorded so far and let them be paid for it without leaving.
+         * DbrDoomMod: the player finished a map, so close the segment covering
+         * it and hand it up to be paid for without them leaving the cabinet.
          *
-         * A copy, not a cut. The recording keeps going, because the demo can
-         * only ever start where the playthrough started: the next map is
-         * reached through DoLoadLevel, carrying the weapons and health of this
-         * one, while a replay of a demo beginning there would call InitNew and
-         * start with a pistol. Cutting per map would produce demos that replay
-         * into a different game, which is the one thing this must never do.
+         * A cut, not a copy. This used to hand up a longer prefix of one
+         * recording every time, because a demo replays from a level start with
+         * a pistol and the next map is entered carrying this one's weapons - so
+         * a demo beginning there replayed into a different game. What that cost
+         * was a squared amount of work: nine maps meant replaying the first one
+         * nine times.
          *
-         * So each of these is a prefix of the same run, and every one replays
-         * correctly from the beginning. The server pays the difference.
+         * Cutting is possible now because what the demo cannot say is written
+         * down beside it. See dbrRollSegment() for what travels and why that is
+         * enough; the next segment begins in DoWorldDone, where the engine
+         * knows which map was picked.
+         *
+         * Nothing is recorded during the intermission that follows, which is
+         * right: a replay of a segment starts at a level and ends at its exit.
          */
         if (dbrAutoRecord && demorecording) {
             dbrPendingRun = dbrSerialiseRun();
+            demorecording = false;
         }
 
         WI_Start: {
@@ -1936,6 +1953,17 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
     public void DoWorldDone() {
         gamestate = GS_LEVEL;
         gamemap = wminfo.next + 1;
+
+        /*
+         * DbrDoomMod: begins the segment for the map about to be loaded.
+         *
+         * Here rather than inside DoLoadLevel because gamemap is already the
+         * new map and the player has not been respawned yet, so what is
+         * captured is exactly what a replay has to install before building the
+         * level - which is what makes the two symmetrical. See dbrRollSegment().
+         */
+        dbrRollSegment();
+
         DoLoadLevel();
         gameaction = ga_nothing;
         viewactive = true;
@@ -2361,7 +2389,225 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
         demoname = null;
         demobuffer = new VanillaDoomDemo();
         demorecording = true;
+        /*
+         * The first segment of a playthrough carries nothing: it starts where a
+         * demo naturally starts, at a level with a pistol, which is exactly what
+         * a replay rebuilds on its own.
+         */
+        dbrSegmentState = null;
+        dbrSegment = 0;
         BeginRecording();
+    }
+
+    /**
+     * DbrDoomMod: closes the segment that has just ended and opens the next.
+     *
+     * A demo header says which map, which skill and nothing else, so a replay
+     * of it starts the level fresh with a pistol. That is the whole reason a run
+     * used to be one recording from the start of the playthrough, uploaded again
+     * and again as it grew, and why that cost a squared amount of work.
+     *
+     * What the header cannot say is captured here instead and travels beside the
+     * demo. Two things, and only two, differ between "the engine loaded the next
+     * map" and "the engine started this map for a replay":
+     *
+     *   - G_PlayerReborn, which a replay runs because InitNew marks every player
+     *     PST_REBORN, and which wipes the inventory the player carried in.
+     *   - M_ClearRandom, which InitNew calls and a level transition does not.
+     *     The random index carries across a map in real play, so a replay
+     *     starting from zero would have the first monster to act roll a
+     *     different number - and from there the two are different games.
+     *
+     * Everything else already matches: powers, keys and the damage palette are
+     * cleared by PlayerFinishLevel on one side and start clear on the other, and
+     * the kill, item and secret counts are reset by P_SetupLevel on both.
+     */
+    private void dbrRollSegment() {
+        if (!dbrAutoRecord) {
+            return;
+        }
+
+        if (demorecording) {
+            /*
+             * DoCompleted closes the segment before this runs, so reaching here
+             * with one open means something else did. Closing it rather than
+             * letting it continue: a segment spanning two maps replays into the
+             * first of them and quietly stops describing the second.
+             */
+            dbrPendingRun = dbrSerialiseRun();
+        }
+
+        dbrSegmentState = dbrCaptureCarriedState();
+        dbrSegment++;
+
+        demoname = null;
+        demobuffer = new VanillaDoomDemo();
+        demorecording = true;
+        BeginRecording();
+    }
+
+    /**
+     * DbrDoomMod: what the player is carrying into the map about to be loaded.
+     *
+     * An int array rather than a class, because it crosses into
+     * {@link com.dbr.doom.host.RunFormat} as an opaque payload and comes back
+     * into {@link #dbrApplyStartState()} on the other side. Only those two know
+     * the layout, so adding a field is one edit in each and none in the
+     * envelope, the uploader, the protocol or the plugin.
+     *
+     * Read straight off the player, at the one moment where the carried state
+     * exists and the new level does not: after PlayerFinishLevel has taken the
+     * keys away and before P_SpawnPlayer respawns anybody.
+     */
+    private int[] dbrCaptureCarriedState() {
+        final player_t player = players[consoleplayer];
+        final int[] indices = random.dbrIndices();
+
+        final int weapons = player.weaponowned.length;
+        final int ammoTypes = player.ammo.length;
+
+        final int[] state = new int[DBR_STATE_FIXED + weapons + ammoTypes * 2];
+        int at = 0;
+        state[at++] = player.health[0];
+        state[at++] = player.armorpoints[0];
+        state[at++] = player.armortype;
+        state[at++] = player.readyweapon == null ? -1 : player.readyweapon.ordinal();
+        state[at++] = player.pendingweapon == null ? -1 : player.pendingweapon.ordinal();
+        state[at++] = player.backpack ? 1 : 0;
+        /*
+         * The two "is that key still held" flags. PlayerReborn sets both, so a
+         * player who respawns holding the trigger does not immediately fire;
+         * crossing a map boundary with the trigger down is the same situation,
+         * and getting it wrong is one extra shot on the first tic.
+         */
+        state[at++] = player.attackdown ? 1 : 0;
+        state[at++] = player.usedown ? 1 : 0;
+        /*
+         * Weapon accuracy depends on it: a chaingun on its tenth tic does not
+         * shoot where a chaingun on its first does.
+         */
+        state[at++] = player.refire;
+        state[at++] = indices[0];
+        state[at++] = indices[1];
+        state[at++] = weapons;
+        state[at++] = ammoTypes;
+        /*
+         * Whether any of the above is worth putting back.
+         *
+         * A player who died on the last tics of a map walks into the next one
+         * through G_PlayerReborn: DoLoadLevel turns PST_DEAD into PST_REBORN,
+         * and P_SpawnPlayer hands them a hundred health and a pistol. Restoring
+         * the corpse instead would start the map with a dead player who never
+         * moves, which is what this measured before the flag existed - 2096
+         * tics, every one of them different.
+         *
+         * The random index still has to travel, which is why this is a flag
+         * rather than a state that is simply not sent.
+         */
+        state[at++] = player.playerstate == PST_DEAD ? 0 : 1;
+
+        for (int i = 0; i < weapons; i++) {
+            state[at++] = player.weaponowned[i] ? 1 : 0;
+        }
+        for (int i = 0; i < ammoTypes; i++) {
+            state[at++] = player.ammo[i];
+        }
+        for (int i = 0; i < ammoTypes; i++) {
+            state[at++] = player.maxammo[i];
+        }
+        return state;
+    }
+
+    /** DbrDoomMod: how many fixed ints precede the weapon and ammo arrays. */
+    private static final int DBR_STATE_FIXED = 14;
+
+    /**
+     * DbrDoomMod: the state a replay has to install, set by the verifier before
+     * the engine is started.
+     *
+     * Applied once, by the level load that follows, and then cleared: the later
+     * maps of a playthrough are not in this demo at all, since each one is a
+     * segment of its own.
+     */
+    public volatile int[] dbrPendingStartState;
+
+    /**
+     * DbrDoomMod: puts a carried state back, just before a level is built.
+     *
+     * The mirror of {@link #dbrCaptureCarriedState()}. Marking the player alive
+     * is half the work: P_SpawnPlayer only calls G_PlayerReborn for a player
+     * marked PST_REBORN, which InitNew did to everybody, so leaving it set would
+     * wipe everything installed here a moment later.
+     */
+    private void dbrApplyStartState() {
+        final int[] state = dbrPendingStartState;
+        if (state == null) {
+            return;
+        }
+        dbrPendingStartState = null;
+
+        if (state.length < DBR_STATE_FIXED) {
+            System.err.println("DbrDoomMod: ignoring a truncated start state");
+            return;
+        }
+
+        final player_t player = players[consoleplayer];
+        int at = 0;
+        player.health[0] = state[at++];
+        player.armorpoints[0] = state[at++];
+        player.armortype = state[at++];
+        final int ready = state[at++];
+        final int pending = state[at++];
+        player.backpack = state[at++] != 0;
+        player.attackdown = state[at++] != 0;
+        player.usedown = state[at++] != 0;
+        player.refire = state[at++];
+        final int prndindex = state[at++];
+        final int rndindex = state[at++];
+        final int weapons = state[at++];
+        final int ammoTypes = state[at++];
+        final boolean alive = state[at++] != 0;
+
+        if (weapons < 0 || ammoTypes < 0
+                || state.length < DBR_STATE_FIXED + weapons + ammoTypes * 2) {
+            System.err.println("DbrDoomMod: ignoring a malformed start state");
+            return;
+        }
+
+        /*
+         * The random index travels either way; the inventory does not. A player
+         * who reached the exit dead is reborn by the level load, on both sides,
+         * so leaving PST_REBORN alone here is what reproduces it.
+         */
+        if (!alive) {
+            random.dbrSetIndices(prndindex, rndindex);
+            return;
+        }
+
+        for (int i = 0; i < weapons && i < player.weaponowned.length; i++) {
+            player.weaponowned[i] = state[at + i] != 0;
+        }
+        at += weapons;
+        for (int i = 0; i < ammoTypes && i < player.ammo.length; i++) {
+            player.ammo[i] = state[at + i];
+        }
+        at += ammoTypes;
+        for (int i = 0; i < ammoTypes && i < player.maxammo.length; i++) {
+            player.maxammo[i] = state[at + i];
+        }
+
+        final weapontype_t[] all = weapontype_t.values();
+        if (ready >= 0 && ready < all.length) {
+            player.readyweapon = all[ready];
+        }
+        if (pending >= 0 && pending < all.length) {
+            player.pendingweapon = all[pending];
+        }
+
+        random.dbrSetIndices(prndindex, rndindex);
+
+        // Alive, so P_SpawnPlayer leaves everything above alone.
+        player.playerstate = PST_LIVE;
     }
 
     /**
@@ -2407,19 +2653,38 @@ public class DoomMain<T, V> extends DoomStatus<T, V> implements IDoomGameNetwork
         return demo;
     }
 
-    /** DbrDoomMod: the header, every tic and the end marker, as bytes. */
+    /**
+     * DbrDoomMod: the header, every tic and the end marker, wrapped.
+     *
+     * The demo inside is byte for byte what the engine recorded. What is added
+     * around it is which playthrough and which map of it this is, and the state
+     * the segment began with - none of which a demo header can hold.
+     *
+     * @see com.dbr.doom.host.RunFormat
+     */
     private byte[] dbrSerialiseRun() {
         try {
             final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             final DataOutputStream out = new DataOutputStream(bytes);
             demobuffer.write(out);
             out.flush();
-            return bytes.toByteArray();
+            return com.dbr.doom.host.RunFormat.encode(
+                dbrRunSerial, dbrSegment, dbrSegmentState, bytes.toByteArray());
         } catch (IOException e) {
             System.err.println("Could not serialise the Doom run: " + e);
             return null;
         }
     }
+
+    /** DbrDoomMod: which map of the playthrough is being recorded, from zero. */
+    public int dbrSegment() {
+        return dbrSegment;
+    }
+
+    private volatile int dbrSegment;
+
+    /** DbrDoomMod: what the segment being recorded started with, or null. */
+    private volatile int[] dbrSegmentState;
 
     /**
      * DbrDoomMod: takes the run the player ended by starting another one, or

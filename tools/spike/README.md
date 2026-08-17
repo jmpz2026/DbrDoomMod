@@ -29,6 +29,42 @@ and becomes the isolation mechanism: N classloaders, N parallel verifiers.
 Replaying 7000 tics takes about 300ms, roughly 660x real time. A ten minute map
 verifies in under a second.
 
+## What it also proves, later
+
+**3. A segment that starts mid-playthrough replays exactly.**
+`SegmentSpike` records a session that crosses a map boundary, cuts it the way
+the mod now does, and replays the second segment on its own. Map two is entered
+carrying map one's weapons, ammo, health and random index, while a demo header
+says only "episode 1, map 2, skill 3" - so this is the whole question behind
+recording per map instead of re-uploading a longer prefix every time.
+
+Measured: 896 and 2096 tic segments, 2 to 6 replays each, agreeing with the
+recording on **every aligned tic** - position, angle, health, ammo, kills - and
+identical to each other. Both runs carried something real: 76 health and 24
+rounds in one, a death at the exit in the other.
+
+It earned its keep immediately. The first version restored the player's state
+unconditionally, including a player who reached the exit dead - and the engine
+reborns those on the next map. 2096 tics compared, 2096 different. That is a bug
+that pays wrong amounts silently and no amount of reading the code had caught it.
+
+```
+javac -nowarn -cp ../../build/libs/dbrdoom-0.3.1.jar -d out SegmentSpike.java SpikeRunner.java
+java -cp out SegmentSpike ../../build/libs/dbrdoom-0.3.1.jar out \
+    ../../run/config/dbrdoom/wads/freedoom1.wad segwork [replays] [ticsPerMap]
+```
+
+The exit is reached by calling `ExitLevel()`, which is what the exit line calls:
+scripting a bot to a real switch is not practical. The comparison is keyed on
+`leveltime`, not `gametic` - the recording has already played a map, so its
+gametic is a thousand further along and comparing on it would call every tic a
+disagreement.
+
+The recording's first few tics are missing from its own timeline, because a live
+engine runs tics in batches inside one frame while a `-timedemo` replay runs
+exactly one. That is not a hole: a desync does not heal, so a carried state that
+was wrong on tic one disagrees on every tic after it too.
+
 ## Running it
 
 ```

@@ -92,6 +92,17 @@ public class DelegateRandom implements IRandom {
         return random.getIndex();
     }
 
+    /** DbrDoomMod: see IRandom.dbrIndices. */
+    @Override
+    public int[] dbrIndices() {
+        return random.dbrIndices();
+    }
+
+    @Override
+    public void dbrSetIndices(int prndindex, int rndindex) {
+        random.dbrSetIndices(prndindex, rndindex);
+    }
+
     @Override
     public int P_Random(int caller) {
         return random.P_Random(caller);

@@ -173,6 +173,18 @@ class DoomRandom implements IRandom{
         return prndindex;
     }
 
+    /** DbrDoomMod: see IRandom.dbrIndices. */
+    @Override
+    public int[] dbrIndices() {
+        return new int[] { prndindex, rndindex };
+    }
+
+    @Override
+    public void dbrSetIndices(int prndindex, int rndindex) {
+        this.prndindex = prndindex & 0xff;
+        this.rndindex = rndindex & 0xff;
+    }
+
     DoomRandom(ISyncLogger SLY) {
         this.SLY = SLY;
     }

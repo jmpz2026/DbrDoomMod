@@ -27,6 +27,7 @@ import com.dbr.doom.engine.doom.DoomMain;
 import com.dbr.doom.engine.doom.player_t;
 import com.dbr.doom.engine.doom.playerstate_t;
 import com.dbr.doom.engine.mochadoom.Engine;
+import com.dbr.doom.host.RunFormat;
 
 /**
  * Replays a recorded run and reports what actually happened in it.
@@ -44,8 +45,8 @@ import com.dbr.doom.engine.mochadoom.Engine;
  *
  * Through a {@link ClassLoader} of its own, over the mod jar, with a null
  * parent. That is possible because com.dbr.doom.engine.** references
- * nothing outside itself but DoomExitException, and this class adds
- * nothing but the JDK - no Forge, no Minecraft, no Bukkit. Every argument and
+ * nothing outside itself but DoomExitException and RunFormat, and this
+ * class adds nothing but the JDK - no Forge, no Minecraft, no Bukkit. Every argument and
  * the result are Strings and byte arrays, which are bootstrap types and so are
  * shared across the boundary rather than duplicated.
  *
@@ -101,7 +102,9 @@ public final class RunVerifier {
     /**
      * Replays a demo and reports every rewardable event in it.
      *
-     * @param demo    the recorded run, as produced by DoomMain.dbrFinishRun()
+     * @param demo    the recorded run, as produced by DoomMain.dbrFinishRun():
+     *                a demo wrapped by {@link RunFormat}, or a bare demo from a
+     *                client old enough to predate the envelope
      * @param iwad    absolute path of the WAD to replay against. Must be the
      *                same one the run was recorded on, which the caller checks
      *                by hash before getting here
@@ -137,13 +140,39 @@ public final class RunVerifier {
         return report.render();
     }
 
-    private static void replay(byte[] demo, String iwad, String workDir, RunReport report)
+    private static void replay(byte[] upload, String iwad, String workDir, RunReport report)
             throws Exception {
 
         final File work = new File(workDir);
         if (!work.isDirectory() && !work.mkdirs()) {
             report.fail("could not create the work directory " + workDir);
             return;
+        }
+
+        /*
+         * A run is one map, and a demo cannot say what the player walked into it
+         * carrying - so the state travels beside it and is installed before the
+         * level is built. See RunFormat for why a run is cut per map at all.
+         */
+        final byte[] demo;
+        final int[] startState;
+
+        if (RunFormat.isWrapped(upload)) {
+            final RunFormat.Run run = RunFormat.decode(upload);
+            if (run == null) {
+                report.fail("the run is damaged or from a newer mod");
+                return;
+            }
+            demo = run.demo();
+            startState = run.state();
+        } else {
+            /*
+             * A bare demo, from a client that has not been updated yet. It can
+             * only be the start of a playthrough, so there is nothing to carry
+             * and the replay rebuilds it the way it always did.
+             */
+            demo = upload;
+            startState = null;
         }
 
         /*
@@ -160,7 +189,7 @@ public final class RunVerifier {
         }
 
         try {
-            final DoomMain<?, ?> doom = boot(iwad, work, lmp);
+            final DoomMain<?, ?> doom = boot(iwad, work, lmp, startState);
             sample(doom, report);
         } finally {
             if (lmp.isFile() && !lmp.delete()) {
@@ -169,7 +198,8 @@ public final class RunVerifier {
         }
     }
 
-    private static DoomMain<?, ?> boot(String iwad, File work, File lmp) throws Exception {
+    private static DoomMain<?, ?> boot(String iwad, File work, File lmp, int[] startState)
+            throws Exception {
         /*
          * Points the engine's config files at the work directory. Left alone it
          * would read and write the ones the client plays with, and a setting
@@ -194,6 +224,14 @@ public final class RunVerifier {
             "-nosound", "-nomusic", "-nodraw", "-noblit");
 
         final DoomMain<?, ?> doom = engine.getDOOM();
+
+        /*
+         * Before a single frame runs. The engine applies it in the level load
+         * that the demo's first frames trigger, which is where the real session
+         * carried the same state in.
+         */
+        doom.dbrPendingStartState = startState;
+
         doom.setupSession();
         doom.initLoop();
         return doom;
