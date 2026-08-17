@@ -83,11 +83,20 @@ public final class FreedoomInstaller {
     private static final String XZ_SUFFIX = ".xz";
 
     /**
-     * Records the size and hash of the WAD as it was written.
+     * Records the size and hash of the WAD as it was written, and which packed
+     * resource it came out of.
      *
      * Without it, telling "the file we unpacked" from "a file of the same name"
      * would mean decompressing the resource on every launch to compare against
      * it. With it the usual case is a stat and a hash of what is already there.
+     *
+     * The third field is the fix for what the first two cannot see. Size and
+     * hash answer "has anybody touched this since we wrote it", which is not
+     * the same question as "is this the WAD this build ships". A player who
+     * updated the mod kept the old WAD for ever: the file matched its own stamp
+     * perfectly, so nothing ever looked at the jar again. On a server that had
+     * moved to the new data, that client played happily and earned nothing,
+     * with "your WAD is not one the server can verify" as the only clue.
      */
     private static final String STAMP_NAME = ".freedoom-stamp";
 
@@ -115,6 +124,17 @@ public final class FreedoomInstaller {
         }
 
         int written = 0;
+
+        /*
+         * Set when the WAD is replaced, which is also when the notes beside it
+         * stop being true: MODIFICATIONS-freedoom.txt says which maps and how
+         * much artwork were removed, and the BSD licence is satisfied by that
+         * note travelling with the binary it describes - not with the one
+         * before it. The WAD is first in BUNDLED, so the flag is set by the
+         * time the others are reached.
+         */
+        boolean wadReplaced = false;
+
         for (String name : BUNDLED) {
             final boolean compressed = name.endsWith(XZ_SUFFIX);
             final String targetName = compressed
@@ -128,7 +148,11 @@ public final class FreedoomInstaller {
              * The WAD is checked, the licence and credits only have to exist. A
              * player who edits CREDITS-freedoom.txt is not changing the game.
              */
-            if (target.isFile() && !(isIwad && !matchesStamp(wadDir, target))) {
+            final boolean stale = isIwad
+                ? !matchesStamp(wadDir, target, RESOURCE_ROOT + name)
+                : wadReplaced;
+
+            if (target.isFile() && !stale) {
                 continue;
             }
 
@@ -140,7 +164,8 @@ public final class FreedoomInstaller {
             if (extract(RESOURCE_ROOT + name, target, compressed)) {
                 written++;
                 if (isIwad) {
-                    writeStamp(wadDir, target);
+                    writeStamp(wadDir, target, RESOURCE_ROOT + name);
+                    wadReplaced = true;
                 }
             }
         }
@@ -148,8 +173,15 @@ public final class FreedoomInstaller {
         return written;
     }
 
-    /** True if the file on disk is the one the stamp was written for. */
-    private static boolean matchesStamp(File wadDir, File wad) {
+    /**
+     * True if the file on disk is the one this build would unpack.
+     *
+     * Two questions, in the order that makes the cheap one settle it: does this
+     * stamp belong to the WAD in the jar we are running, and is the file still
+     * the one that stamp was written for. The first costs a directory entry out
+     * of the jar, the second a stat and, only if that agrees, a hash.
+     */
+    private static boolean matchesStamp(File wadDir, File wad, String resource) {
         final File stamp = new File(wadDir, STAMP_NAME);
         if (!stamp.isFile()) {
             return false;
@@ -165,11 +197,23 @@ public final class FreedoomInstaller {
             }
 
             final String[] parts = new String(raw, 0, read, "US-ASCII").trim().split(" ");
-            if (parts.length != 2) {
+            /*
+             * Two fields is a stamp from before this build knew to record which
+             * resource it came from - which is exactly the case that shipped the
+             * wrong WAD, so it is not trusted. Unpacking once more is the cost.
+             */
+            if (parts.length != 3) {
                 return false;
             }
 
-            // Size first: it settles the usual case without reading 12MB.
+            final String identity = resourceIdentity(resource);
+            if (identity != null && !identity.equals(parts[2])) {
+                DbrDoomMod.logger().info(
+                    "The bundled WAD has changed since it was unpacked; replacing it");
+                return false;
+            }
+
+            // Size next: it settles the usual case without reading 12MB.
             if (Long.parseLong(parts[0]) != wad.length()) {
                 return false;
             }
@@ -181,11 +225,52 @@ public final class FreedoomInstaller {
         }
     }
 
-    private static void writeStamp(File wadDir, File wad) {
+    /**
+     * What identifies the packed WAD in this jar, without unpacking it.
+     *
+     * A jar directory entry already carries the size and CRC of every file in
+     * it, so this costs a lookup and no reading at all. Outside a jar - a
+     * development run over loose files - there is no entry, and the length and
+     * timestamp of the resource are the best available and quite enough: the
+     * question is only whether the build changed.
+     *
+     * @return null if it cannot be established, in which case the caller falls
+     *         back to what the stamp could always check
+     */
+    private static String resourceIdentity(String resource) {
+        final java.net.URL url = FreedoomInstaller.class.getResource(resource);
+        if (url == null) {
+            return null;
+        }
+
+        try {
+            final java.net.URLConnection connection = url.openConnection();
+            if (connection instanceof java.net.JarURLConnection) {
+                final java.util.jar.JarEntry entry =
+                    ((java.net.JarURLConnection) connection).getJarEntry();
+                if (entry != null && entry.getCrc() >= 0) {
+                    return entry.getSize() + "-" + Long.toHexString(entry.getCrc());
+                }
+            }
+
+            final long length = connection.getContentLengthLong();
+            final long modified = connection.getLastModified();
+            if (length >= 0) {
+                return length + "-" + modified;
+            }
+        } catch (IOException e) {
+            // Fall through: the stamp still checks what it always did.
+        }
+        return null;
+    }
+
+    private static void writeStamp(File wadDir, File wad, String resource) {
         OutputStream out = null;
         try {
+            final String identity = resourceIdentity(resource);
             out = new FileOutputStream(new File(wadDir, STAMP_NAME));
-            out.write((wad.length() + " " + hash(wad)).getBytes("US-ASCII"));
+            out.write((wad.length() + " " + hash(wad) + " "
+                + (identity == null ? "unknown" : identity)).getBytes("US-ASCII"));
         } catch (Exception e) {
             /*
              * Not fatal: without a stamp the next launch decides the WAD is not
