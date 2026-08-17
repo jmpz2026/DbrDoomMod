@@ -20,10 +20,6 @@ package com.dbr.doom;
 
 import java.io.File;
 
-import net.minecraft.init.Blocks;
-import net.minecraft.init.Items;
-import net.minecraft.item.ItemStack;
-
 import cpw.mods.fml.common.Mod;
 import cpw.mods.fml.common.SidedProxy;
 import cpw.mods.fml.common.event.FMLInitializationEvent;
@@ -104,18 +100,11 @@ public class DbrDoomMod {
     @Mod.EventHandler
     public void init(FMLInitializationEvent event) {
         /*
-         * Iron frame, glass screen, redstone wiring, and an ender eye to keep it
-         * out of reach early on so servers do not fill up with cabinets.
+         * No recipe, deliberately. A cabinet is placed by staff, not crafted:
+         * it is a fixture of an arcade somebody built, and letting players make
+         * their own would put one in every base. It stays in the Redstone
+         * creative tab, which with /give is how an admin gets one.
          */
-        GameRegistry.addRecipe(new ItemStack(arcadeBlock),
-            "IGI",
-            "RER",
-            "IRI",
-            'I', Items.iron_ingot,
-            'G', Blocks.glass,
-            'R', Items.redstone,
-            'E', Items.ender_eye);
-
         proxy.init();
     }
 

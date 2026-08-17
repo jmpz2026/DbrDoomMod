@@ -1,7 +1,7 @@
 # DbrDoomMod
 
-Play Doom inside Minecraft 1.7.10. Craft an arcade cabinet, right click it, and
-Doom runs on its screen while the world carries on around you.
+Play Doom inside Minecraft 1.7.10. Right click an arcade cabinet and Doom runs
+on its screen while the world carries on around you.
 
 The mod must be installed on **both the client and the server**. The block has to
 exist on both sides; the Doom engine itself only ever runs on a client.
@@ -10,14 +10,16 @@ exist on both sides; the Doom engine itself only ever runs on a client.
 
 A solid block with a screen on the face you were looking at when you placed it.
 
+**There is no recipe.** A cabinet is placed by staff, not crafted: it is a
+fixture of an arcade somebody built, and a craftable one ends up in every base.
+It sits in the Redstone creative tab, so an admin gets one from there or with:
+
 ```
-I G I      I = Iron ingot     G = Glass
-R E R      R = Redstone       E = Eye of Ender
-I R I
+/give <player> dbrdoom:doom_arcade
 ```
 
-The eye of ender keeps it out of reach early on, so servers do not fill up with
-cabinets. It is in the Redstone creative tab.
+Once placed it behaves like any other block, so if players should not be able to
+mine it and take it away, protect the area the way you would protect any build.
 
 Right click to play. The server decides who gets a machine, so two players
 clicking at once cannot both end up on it; the second is told who has it.
